@@ -40,6 +40,7 @@ Board provides:
 
 1. run list and search/filter
 2. run-level metrics and status
+3. token / peak-context summary from manifest context telemetry
 3. quick buttons: `view`, `replay`, `export raw`, `export html`
 
 ## 2) View one run (readable cards)
@@ -54,8 +55,9 @@ In `view` page:
 
 1. `Traj` tab for step-by-step cards
 2. `Manifest` tab for run metadata
-3. timeline and event sections
-4. font scaling and fold/unfold controls
+3. phase timeline plus a dedicated context timeline
+4. peak occupancy, per-step context usage, and compact markers
+5. font scaling and fold/unfold controls
 
 ## 3) Replay one run in browser
 
@@ -72,6 +74,8 @@ This opens focused replay mode at:
 ```
 
 Use replay when you need to inspect temporal order of events and failures.
+
+Replay also shows context-compaction moments as first-class replay cards when they were emitted during the run.
 
 ## 4) Export run artifacts
 

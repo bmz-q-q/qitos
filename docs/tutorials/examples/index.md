@@ -55,6 +55,7 @@ StateSchema -> prepare -> Engine/Model decide -> tool/env -> reduce -> trace/qit
 - SWE agent (dynamic plan + branch selection): [SWE Walkthrough](real_swe.md)
 - Computer-use web research agent (JSON decisions): [Computer-Use Walkthrough](real_computer_use.md)
 - EPUB reader ToT agent (branching over evidence): [EPUB Reader Walkthrough](real_epub_reader.md)
+- Code security audit agent (security evidence + task board + coding tools): `examples/real/code_security_audit_agent.py`
 - Compact-enabled ReAct agent (same shape, swap history preset): `examples/real/react_compact_agent.py`
 
 ## Source Index
@@ -68,6 +69,7 @@ StateSchema -> prepare -> Engine/Model decide -> tool/env -> reduce -> trace/qit
 - [examples/real/swe_agent.py](https://github.com/Qitor/qitos/blob/main/examples/real/swe_agent.py)
 - [examples/real/computer_use_agent.py](https://github.com/Qitor/qitos/blob/main/examples/real/computer_use_agent.py)
 - [examples/real/epub_reader_agent.py](https://github.com/Qitor/qitos/blob/main/examples/real/epub_reader_agent.py)
+- [examples/real/code_security_audit_agent.py](https://github.com/Qitor/qitos/blob/main/examples/real/code_security_audit_agent.py)
 - [examples/real/react_compact_agent.py](https://github.com/Qitor/qitos/blob/main/examples/real/react_compact_agent.py)
 - [examples/benchmarks/gaia_eval.py](https://github.com/Qitor/qitos/blob/main/examples/benchmarks/gaia_eval.py)
 - [examples/benchmarks/tau_bench_eval.py](https://github.com/Qitor/qitos/blob/main/examples/benchmarks/tau_bench_eval.py)

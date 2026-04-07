@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import warnings
 from typing import Any, Dict, Optional
 from urllib.parse import urlparse
 
@@ -69,19 +70,7 @@ class HTTPRequest(BaseTool):
             )
         )
 
-    def run(
-        self,
-        method: str,
-        url: str,
-        params: Optional[Dict[str, Any]] = None,
-        data: Optional[Dict[str, Any]] = None,
-        json_data: Optional[Dict[str, Any]] = None,
-        headers: Optional[Dict[str, str]] = None,
-        timeout: Optional[int] = None,
-        verify_tls: bool = True,
-        allow_redirects: bool = True,
-        max_content_chars: int = 120_000,
-    ) -> Dict[str, Any]:
+    def execute(self, args: Dict[str, Any], runtime_context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         Execute an HTTP request and return a structured response payload.
 
@@ -98,7 +87,17 @@ class HTTPRequest(BaseTool):
 
         Returns status code, headers, body text, and parsed JSON when available.
         """
-        method = str(method or "").upper().strip()
+        _ = runtime_context
+        method = str(args.get("method", "") or "").upper().strip()
+        url = str(args.get("url", ""))
+        params = args.get("params")
+        data = args.get("data")
+        json_data = args.get("json_data")
+        headers = args.get("headers")
+        timeout = args.get("timeout")
+        verify_tls = bool(args.get("verify_tls", True))
+        allow_redirects = bool(args.get("allow_redirects", True))
+        max_content_chars = int(args.get("max_content_chars", 120_000))
         if method not in {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}:
             return {"status": "error", "message": f"Unsupported HTTP method: {method}"}
         err = self._validate_url(url)
@@ -215,15 +214,7 @@ class HTTPGet(BaseTool):
             )
         )
 
-    def run(
-        self,
-        url: str,
-        params: Optional[Dict[str, Any]] = None,
-        headers: Optional[Dict[str, str]] = None,
-        timeout: Optional[int] = None,
-        verify_tls: bool = True,
-        allow_redirects: bool = True,
-    ) -> Dict[str, Any]:
+    def execute(self, args: Dict[str, Any], runtime_context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         Execute one HTTP GET request.
 
@@ -234,14 +225,15 @@ class HTTPGet(BaseTool):
         :param verify_tls: Whether TLS certificates should be verified.
         :param allow_redirects: Whether redirects should be followed automatically.
         """
+        _ = runtime_context
         return self._request.run(
             method="GET",
-            url=url,
-            params=params,
-            headers=headers,
-            timeout=timeout,
-            verify_tls=verify_tls,
-            allow_redirects=allow_redirects,
+            url=str(args.get("url", "")),
+            params=args.get("params"),
+            headers=args.get("headers"),
+            timeout=args.get("timeout"),
+            verify_tls=bool(args.get("verify_tls", True)),
+            allow_redirects=bool(args.get("allow_redirects", True)),
         )
 
 
@@ -272,16 +264,7 @@ class HTTPPost(BaseTool):
             )
         )
 
-    def run(
-        self,
-        url: str,
-        data: Optional[Dict[str, Any]] = None,
-        json_data: Optional[Dict[str, Any]] = None,
-        headers: Optional[Dict[str, str]] = None,
-        timeout: Optional[int] = None,
-        verify_tls: bool = True,
-        allow_redirects: bool = True,
-    ) -> Dict[str, Any]:
+    def execute(self, args: Dict[str, Any], runtime_context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         Execute one HTTP POST request.
 
@@ -293,15 +276,16 @@ class HTTPPost(BaseTool):
         :param verify_tls: Whether TLS certificates should be verified.
         :param allow_redirects: Whether redirects should be followed automatically.
         """
+        _ = runtime_context
         return self._request.run(
             method="POST",
-            url=url,
-            data=data,
-            json_data=json_data,
-            headers=headers,
-            timeout=timeout,
-            verify_tls=verify_tls,
-            allow_redirects=allow_redirects,
+            url=str(args.get("url", "")),
+            data=args.get("data"),
+            json_data=args.get("json_data"),
+            headers=args.get("headers"),
+            timeout=args.get("timeout"),
+            verify_tls=bool(args.get("verify_tls", True)),
+            allow_redirects=bool(args.get("allow_redirects", True)),
         )
 
 
@@ -323,7 +307,7 @@ class HTMLExtractText(BaseTool):
             )
         )
 
-    def run(self, html: str, max_chars: int = 6000, keep_links: bool = False) -> Dict[str, Any]:
+    def execute(self, args: Dict[str, Any], runtime_context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         Extract readable text from raw HTML.
 
@@ -333,6 +317,10 @@ class HTMLExtractText(BaseTool):
 
         Returns cleaned text and the detected page title when available.
         """
+        _ = runtime_context
+        html = str(args.get("html", ""))
+        max_chars = int(args.get("max_chars", 6000))
+        keep_links = bool(args.get("keep_links", False))
         if not html:
             return {"status": "error", "message": "html cannot be empty"}
         try:
@@ -386,12 +374,17 @@ class WebFetch(BaseTool):
         timeout: int = 30,
         max_retries: int = 2,
     ):
+        warnings.warn(
+            "WebFetch is deprecated; use CodingToolSet.web_fetch or coding_tools() instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self._http = HTTPGet(headers=headers, timeout=timeout, max_retries=max_retries)
         self._extract = HTMLExtractText()
         super().__init__(
             ToolSpec(
                 name="web_fetch",
-                description="Fetch a web page and return structured text content",
+                description="Fetch a web page and optionally return extracted readable text.",
                 parameters={
                     "url": {"type": "string"},
                     "extract_text": {"type": "boolean"},
@@ -404,14 +397,7 @@ class WebFetch(BaseTool):
             )
         )
 
-    def run(
-        self,
-        url: str,
-        extract_text: bool = True,
-        keep_links: bool = False,
-        max_chars: int = 20_000,
-        timeout: Optional[int] = None,
-    ) -> Dict[str, Any]:
+    def execute(self, args: Dict[str, Any], runtime_context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         Fetch a web page and optionally extract readable text from it.
 
@@ -423,22 +409,27 @@ class WebFetch(BaseTool):
 
         Combines one HTTP GET with optional HTML-to-text extraction.
         """
+        _ = runtime_context
+        url = str(args.get("url", ""))
+        extract_text = bool(args.get("extract_text", True))
+        keep_links = bool(args.get("keep_links", False))
+        max_chars = int(args.get("max_chars", 20_000))
+        timeout = args.get("timeout")
         response = self._http.run(url=url, timeout=timeout)
-        if response.get("status") == "error":
+        if response.get("status") != "success":
             return response
         if not extract_text:
             return response
-        content = str(response.get("content", ""))
-        extracted = self._extract.run(html=content, max_chars=max_chars, keep_links=keep_links)
+        extracted = self._extract.run(
+            html=str(response.get("content", "")),
+            keep_links=keep_links,
+            max_chars=max_chars,
+        )
         return {
-            "status": extracted.get("status", "success"),
+            "status": "success",
             "url": response.get("url", url),
-            "status_code": response.get("status_code"),
             "title": extracted.get("title", ""),
             "content": extracted.get("content", ""),
-            "content_length": extracted.get("length", 0),
-            "truncated": str(extracted.get("content", "")).endswith("[truncated]"),
-            "raw_content_type": response.get("content_type", ""),
         }
 
 

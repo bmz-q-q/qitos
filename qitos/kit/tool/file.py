@@ -1,27 +1,40 @@
-"""File-oriented concrete tool objects."""
+"""Deprecated file tool adapters that route through env filesystem ops."""
 
 from __future__ import annotations
 
-import os
-from typing import Any, Dict
+import warnings
+from typing import Any, Dict, Optional
 
 from qitos.core.tool import BaseTool, ToolPermission, ToolSpec
 
 
-class WriteFile(BaseTool):
-    """Write UTF-8 text to a workspace file, creating parent directories when needed.
+def _get_file_ops(runtime_context: Optional[Dict[str, Any]]) -> Any:
+    runtime_context = runtime_context or {}
+    ops = runtime_context.get("ops", {})
+    return ops.get("file")
 
-    Use this tool when the agent needs to create or fully overwrite a file. The
-    path is resolved relative to the configured workspace root and is rejected if
-    it escapes that boundary.
+
+class WriteFile(BaseTool):
+    """Write text content to a file under the workspace root.
+
+    :param filename: Path relative to the workspace root.
+    :param content: Full text content to write into the file.
+    :param runtime_context: Optional runtime context carrying env file ops.
+
+    Requires env filesystem ops so the runtime can enforce workspace scope.
     """
 
     def __init__(self, root_dir: str = "."):
-        self._root_dir = os.path.abspath(root_dir)
+        _ = root_dir
+        warnings.warn(
+            "WriteFile is deprecated; use env-backed file tools or CodingToolSet.write_file instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         super().__init__(
             ToolSpec(
                 name="write_file",
-                description="Write content to a file under workspace",
+                description="Write text content to a file under the workspace root.",
                 parameters={"filename": {"type": "string"}, "content": {"type": "string"}},
                 required=["filename", "content"],
                 permissions=ToolPermission(filesystem_write=True),
@@ -29,150 +42,125 @@ class WriteFile(BaseTool):
             )
         )
 
-    def run(self, filename: str, content: str, runtime_context: Dict[str, Any] | None = None) -> Dict[str, Any]:
+    def execute(self, args: Dict[str, Any], runtime_context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         Write text content to a file under the workspace root.
 
         :param filename: Path relative to the workspace root.
         :param content: Full text content to write into the file.
-        :param runtime_context: Optional runtime ops injected by the engine.
+        :param runtime_context: Optional runtime context carrying env file ops.
 
-        Creates parent directories automatically. Rejects paths that escape the
-        configured workspace boundary.
+        Requires env filesystem ops so the runtime can enforce workspace scope.
         """
-        runtime_context = runtime_context or {}
-        ops = runtime_context.get("ops", {})
-        file_ops = ops.get("file")
-        if file_ops is not None and hasattr(file_ops, "write_text"):
-            try:
-                file_ops.write_text(filename, content)
-                return {"status": "success", "path": filename, "size": len(content)}
-            except Exception as e:
-                return {"status": "error", "message": str(e)}
-        if not filename:
-            return {"status": "error", "message": "Filename cannot be empty"}
-        safe_path = os.path.abspath(os.path.join(self._root_dir, filename))
-        if not safe_path.startswith(self._root_dir):
-            return {"status": "error", "message": "Access to files outside directory is prohibited"}
+        filename = str(args.get("filename", ""))
+        content = str(args.get("content", ""))
+        file_ops = _get_file_ops(runtime_context)
+        if file_ops is None:
+            return {"status": "error", "message": "Missing file ops", "path": filename}
         try:
-            os.makedirs(os.path.dirname(safe_path), exist_ok=True)
-            with open(safe_path, "w", encoding="utf-8") as f:
-                f.write(content)
-            return {"status": "success", "path": safe_path, "size": len(content)}
-        except Exception as e:
-            return {"status": "error", "message": str(e)}
+            file_ops.write_text(filename, content)
+            return {"status": "success", "path": filename, "size": len(content)}
+        except Exception as exc:
+            return {"status": "error", "message": str(exc), "path": filename}
 
 
 class ReadFile(BaseTool):
-    """Read the full UTF-8 text content of a workspace file.
+    """Read text content from a file under the workspace root.
 
-    Use this tool to inspect a specific file before editing, summarizing, or
-    reasoning over its contents. The tool returns both the raw text and basic
-    metadata such as the path and size.
+    :param filename: Path relative to the workspace root.
+    :param runtime_context: Optional runtime context carrying env file ops.
+
+    Requires env filesystem ops so the runtime can enforce workspace scope.
     """
 
     def __init__(self, root_dir: str = "."):
-        self._root_dir = os.path.abspath(root_dir)
+        _ = root_dir
+        warnings.warn(
+            "ReadFile is deprecated; use env-backed file tools or CodingToolSet.read_file instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         super().__init__(
             ToolSpec(
                 name="read_file",
-                description="Read file content under workspace",
+                description="Read text content from a file under the workspace root.",
                 parameters={"filename": {"type": "string"}},
                 required=["filename"],
                 permissions=ToolPermission(filesystem_read=True),
                 required_ops=["file"],
+                read_only=True,
             )
         )
 
-    def run(self, filename: str, runtime_context: Dict[str, Any] | None = None) -> Dict[str, Any]:
+    def execute(self, args: Dict[str, Any], runtime_context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
-        Read the full text content of a file under the workspace root.
+        Read text content from a file under the workspace root.
 
         :param filename: Path relative to the workspace root.
-        :param runtime_context: Optional runtime ops injected by the engine.
+        :param runtime_context: Optional runtime context carrying env file ops.
 
-        Returns the file content together with path and size metadata.
+        Requires env filesystem ops so the runtime can enforce workspace scope.
         """
-        runtime_context = runtime_context or {}
-        ops = runtime_context.get("ops", {})
-        file_ops = ops.get("file")
-        if file_ops is not None and hasattr(file_ops, "read_text"):
-            try:
-                content = file_ops.read_text(filename)
-                return {"status": "success", "content": content, "path": filename, "size": len(content)}
-            except Exception as e:
-                return {"status": "error", "message": str(e)}
-        if not filename:
-            return {"status": "error", "message": "Filename cannot be empty"}
-        safe_path = os.path.abspath(os.path.join(self._root_dir, filename))
-        if not safe_path.startswith(self._root_dir):
-            return {"status": "error", "message": "Access to files outside directory is prohibited"}
+        filename = str(args.get("filename", ""))
+        file_ops = _get_file_ops(runtime_context)
+        if file_ops is None:
+            return {"status": "error", "message": "Missing file ops", "path": filename}
         try:
-            with open(safe_path, "r", encoding="utf-8") as f:
-                content = f.read()
-            return {"status": "success", "content": content, "path": safe_path, "size": len(content)}
-        except Exception as e:
-            return {"status": "error", "message": str(e)}
+            content = file_ops.read_text(filename)
+            return {"status": "success", "path": filename, "content": content}
+        except Exception as exc:
+            return {"status": "error", "message": str(exc), "path": filename}
 
 
 class ListFiles(BaseTool):
-    """List files and directories under a workspace-relative path.
+    """List files under one directory inside the workspace root.
 
-    Use this tool to discover what exists in the current workspace before
-    deciding which files to inspect or edit. The output distinguishes files from
-    directories and includes file sizes when available.
+    :param path: Directory path relative to the workspace root.
+    :param limit: Maximum number of returned files.
+    :param runtime_context: Optional runtime context carrying env file ops.
+
+    Requires env filesystem ops so the runtime can enforce workspace scope.
     """
 
     def __init__(self, root_dir: str = "."):
-        self._root_dir = os.path.abspath(root_dir)
+        _ = root_dir
+        warnings.warn(
+            "ListFiles is deprecated; use env-backed file tools or CodingToolSet.list_files instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         super().__init__(
             ToolSpec(
                 name="list_files",
-                description="List files and directories under workspace",
-                parameters={"path": {"type": "string"}},
+                description="List files under one directory inside the workspace root.",
+                parameters={"path": {"type": "string"}, "limit": {"type": "integer"}},
                 required=[],
                 permissions=ToolPermission(filesystem_read=True),
                 required_ops=["file"],
+                read_only=True,
             )
         )
 
-    def run(self, path: str = ".", runtime_context: Dict[str, Any] | None = None) -> Dict[str, Any]:
+    def execute(self, args: Dict[str, Any], runtime_context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
-        List files and directories under a workspace-relative path.
+        List files under one directory inside the workspace root.
 
         :param path: Directory path relative to the workspace root.
-        :param runtime_context: Optional runtime ops injected by the engine.
+        :param limit: Maximum number of returned files.
+        :param runtime_context: Optional runtime context carrying env file ops.
 
-        Returns one entry per file or directory, including type information and
-        file sizes where available.
+        Requires env filesystem ops so the runtime can enforce workspace scope.
         """
-        runtime_context = runtime_context or {}
-        ops = runtime_context.get("ops", {})
-        file_ops = ops.get("file")
-        if file_ops is not None and hasattr(file_ops, "list_files"):
-            try:
-                files = file_ops.list_files(path=path)
-                return {"status": "success", "path": path, "count": len(files), "files": files}
-            except Exception as e:
-                return {"status": "error", "message": str(e)}
-        target_path = os.path.abspath(os.path.join(self._root_dir, path))
-        if not target_path.startswith(self._root_dir):
-            return {"status": "error", "message": "Access to files outside directory is prohibited"}
+        path = str(args.get("path", "."))
+        limit = int(args.get("limit", 200))
+        file_ops = _get_file_ops(runtime_context)
+        if file_ops is None:
+            return {"status": "error", "message": "Missing file ops", "path": path}
         try:
-            items = []
-            for item in os.listdir(target_path):
-                item_path = os.path.join(target_path, item)
-                items.append(
-                    {
-                        "name": item,
-                        "type": "directory" if os.path.isdir(item_path) else "file",
-                        "size": os.path.getsize(item_path) if os.path.isfile(item_path) else None,
-                    }
-                )
-            items.sort(key=lambda x: (x["type"] == "file", x["name"]))
-            return {"status": "success", "path": target_path, "count": len(items), "files": items}
-        except Exception as e:
-            return {"status": "error", "message": str(e)}
+            files = file_ops.list_files(path, limit=limit)
+            return {"status": "success", "path": path, "count": len(files), "files": files}
+        except Exception as exc:
+            return {"status": "error", "message": str(exc), "path": path}
 
 
 __all__ = ["WriteFile", "ReadFile", "ListFiles"]

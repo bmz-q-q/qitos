@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 
 class ErrorCategory(str, Enum):
@@ -24,6 +24,7 @@ class StopReason(str, Enum):
     BUDGET_STEPS = "budget_steps"
     BUDGET_TIME = "budget_time"
     BUDGET_TOKENS = "budget_tokens"
+    CONTEXT_OVERFLOW = "context_overflow"
     AGENT_CONDITION = "agent_condition"
     CRITIC_STOP = "critic_stop"
     STAGNATION = "stagnation"

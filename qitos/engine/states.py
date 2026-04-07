@@ -29,6 +29,43 @@ class RuntimeBudget:
 
 
 @dataclass
+class ContextConfig:
+    enabled: bool = True
+    warning_ratio: float = 0.80
+    compact_ratio: float = 0.85
+    safety_reserve_tokens: Optional[int] = None
+    safety_reserve_ratio: float = 0.05
+    min_safety_reserve_tokens: int = 1024
+    default_context_window: int = 128000
+    strict_overflow: bool = True
+    show_ui: bool = True
+
+
+@dataclass
+class ContextTelemetry:
+    context_window: Optional[int] = None
+    available_input_budget: Optional[int] = None
+    system_prompt_tokens: int = 0
+    history_tokens: int = 0
+    prepared_tokens: int = 0
+    input_tokens_total: int = 0
+    output_tokens: int = 0
+    occupancy_ratio: float = 0.0
+    warning_threshold_ratio: float = 0.80
+    counting_mode: str = "disabled"
+    prompt_tokens_total: int = 0
+    completion_tokens_total: int = 0
+    tokens_total: int = 0
+    peak_input_tokens: int = 0
+    peak_occupancy_ratio: float = 0.0
+    history_message_count: int = 0
+    compact_events: List[Dict[str, Any]] = field(default_factory=list)
+    reserve_tokens: int = 0
+    max_output_tokens: int = 0
+    history_budget: Optional[int] = None
+
+
+@dataclass
 class RuntimeEvent:
     step_id: int
     phase: RuntimePhase
@@ -49,3 +86,4 @@ class StepRecord:
     tool_invocations: List[Any] = field(default_factory=list)
     critic_outputs: List[Any] = field(default_factory=list)
     state_diff: Dict[str, Any] = field(default_factory=dict)
+    context: Dict[str, Any] = field(default_factory=dict)

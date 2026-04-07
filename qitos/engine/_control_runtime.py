@@ -7,10 +7,12 @@ from typing import Any, Dict, Generic, List, Optional, TypeVar
 
 from ..core.decision import Decision
 from ..core.errors import StopReason
+from ..core.state import StateSchema
+from ._context_runtime import ContextOverflowError
 from .states import RuntimePhase, StepRecord
 
 
-StateT = TypeVar("StateT")
+StateT = TypeVar("StateT", bound=StateSchema)
 ObservationT = TypeVar("ObservationT")
 ActionT = TypeVar("ActionT")
 
@@ -260,6 +262,10 @@ class _ControlRuntime(Generic[StateT, ObservationT, ActionT]):
 
         if engine.recovery_handler is not None:
             engine.recovery_handler(state, phase, exc)
+
+        if isinstance(exc, ContextOverflowError):
+            state.set_stop(StopReason.CONTEXT_OVERFLOW)
+            return False
 
         decision = engine.recovery_policy.handle(state, phase.value, step_id, exc)
         if decision.stop_reason:

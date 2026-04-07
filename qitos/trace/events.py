@@ -31,6 +31,7 @@ class TraceStep:
     tool_invocations: List[Any] = field(default_factory=list)
     critic_outputs: List[Any] = field(default_factory=list)
     state_diff: Dict[str, Any] = field(default_factory=dict)
+    context: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)

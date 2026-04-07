@@ -10,8 +10,11 @@ Design Principles:
 """
 
 import os
+import re
 from abc import ABC, abstractmethod
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Type
+
+from .context_registry import infer_context_window
 
 
 class Model(ABC):
@@ -49,7 +52,8 @@ class Model(ABC):
         model: str = "default",
         system_prompt: Optional[str] = None,
         temperature: float = 0.7,
-        max_tokens: int = 2048
+        max_tokens: int = 2048,
+        context_window: Optional[int] = None,
     ):
         """
         Initialize model
@@ -59,11 +63,14 @@ class Model(ABC):
             system_prompt: System prompt
             temperature: Temperature parameter (0.0-1.0)
             max_tokens: Maximum output token count
+            context_window: Total model context window used for input/output budgeting
         """
         self.model = model
         self.system_prompt = system_prompt
         self.temperature = temperature
         self.max_tokens = max_tokens
+        self.context_window = self._resolve_context_window(context_window)
+        self._last_usage: Optional[Dict[str, Any]] = None
     
     @abstractmethod
     def _call_api(self, messages: List[Dict[str, str]]) -> str:
@@ -91,7 +98,60 @@ class Model(ABC):
         Returns:
             Text that can be parsed by parse_tool_calls()
         """
+        self._last_usage = None
         return self._call_api(messages)
+
+    def count_tokens(self, messages_or_text: Any) -> Optional[int]:
+        """
+        Estimate token count for messages or plain text.
+
+        This default implementation is heuristic and provider-agnostic. Concrete
+        model adapters may override it with tokenizer-aware counting.
+        """
+        text = self._stringify_token_payload(messages_or_text)
+        if not text:
+            return 0
+        pieces = re.findall(r"\w+|[^\s\w]", text, flags=re.UNICODE)
+        return len(pieces)
+
+    def extract_usage(self, response: Any = None) -> Optional[Dict[str, Any]]:
+        """
+        Return provider-reported token usage for the most recent call when available.
+        """
+        _ = response
+        if not isinstance(self._last_usage, dict):
+            return None
+        return dict(self._last_usage)
+
+    def _set_last_usage(self, usage: Optional[Dict[str, Any]]) -> None:
+        self._last_usage = dict(usage) if isinstance(usage, dict) else None
+
+    def _resolve_context_window(self, explicit: Optional[int]) -> Optional[int]:
+        if isinstance(explicit, int) and explicit > 0:
+            return explicit
+        inferred = infer_context_window(self.model)
+        if isinstance(inferred, int) and inferred > 0:
+            return inferred
+        return 128000
+
+    def _stringify_token_payload(self, payload: Any) -> str:
+        if payload is None:
+            return ""
+        if isinstance(payload, str):
+            return payload
+        if isinstance(payload, list):
+            parts: List[str] = []
+            for item in payload:
+                if isinstance(item, dict):
+                    role = item.get("role", "")
+                    content = item.get("content", "")
+                    parts.append(f"{role}: {content}")
+                else:
+                    parts.append(str(item))
+            return "\n".join(parts)
+        if isinstance(payload, dict):
+            return "\n".join(f"{k}: {v}" for k, v in payload.items())
+        return str(payload)
     
     def format_messages(
         self,
@@ -187,6 +247,7 @@ Please decide on the next action, or provide a Final Answer if the task is compl
             "model": self.model,
             "temperature": self.temperature,
             "max_tokens": self.max_tokens,
+            "context_window": self.context_window,
             "system_prompt": self.system_prompt
         }
     
@@ -210,16 +271,14 @@ class AsyncModel(Model):
         """
         pass
     
-    async def __call__(self, messages: List[Dict[str, str]]) -> str:
-        """
-        Async call to model
-        """
+    def _call_api(self, messages: List[Dict[str, str]]) -> str:
         import asyncio
-        loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(
-            None,
-            lambda: self._call_api(messages)
-        )
+
+        return asyncio.run(self._acall_api(messages))
+
+    async def acall(self, messages: List[Dict[str, str]]) -> str:
+        """Async call to model."""
+        return await self._acall_api(messages)
 
 
 class ModelFactory:
@@ -229,7 +288,7 @@ class ModelFactory:
     Create different types of models based on configuration
     """
     
-    _providers = {}
+    _providers: Dict[str, Type[Model]] = {}
     
     @classmethod
     def register(cls, name: str) -> Callable:
@@ -269,14 +328,50 @@ class ModelFactory:
         Returns:
             Model instance, or None if unable to create
         """
-        import os
-        
+        provider = os.getenv("QITOS_MODEL_PROVIDER") or os.getenv("MODEL_PROVIDER")
+        if provider:
+            provider_name = str(provider).strip().lower()
+            params = dict(kwargs)
+            if provider_name == "anthropic":
+                params.setdefault("api_key", os.getenv("ANTHROPIC_API_KEY"))
+            elif provider_name in {"gemini", "google"}:
+                params.setdefault("api_key", os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY"))
+            elif provider_name == "litellm":
+                params.setdefault("model", os.getenv("LITELLM_MODEL", params.get("model", "gpt-4o-mini")))
+                params.setdefault("api_key", os.getenv("LITELLM_API_KEY"))
+                params.setdefault("api_base", os.getenv("LITELLM_API_BASE"))
+                params.setdefault("api_version", os.getenv("LITELLM_API_VERSION"))
+                params.setdefault("custom_llm_provider", os.getenv("LITELLM_PROVIDER"))
+            elif provider_name == "ollama":
+                params.setdefault("host", os.getenv("OLLAMA_BASE_URL") or os.getenv("OLLAMA_HOST"))
+            elif provider_name == "lmstudio":
+                params.setdefault("base_url", os.getenv("LM_STUDIO_BASE_URL"))
+            return cls.create(provider_name, **params)
+
         # Check OpenAI
         if os.getenv("OPENAI_API_KEY"):
             return cls.create("openai", **kwargs)
+
+        if os.getenv("ANTHROPIC_API_KEY"):
+            return cls.create("anthropic", **kwargs)
+
+        if os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY"):
+            return cls.create("gemini", **kwargs)
+
+        if os.getenv("LITELLM_MODEL"):
+            params = dict(kwargs)
+            params.setdefault("model", os.getenv("LITELLM_MODEL", "gpt-4o-mini"))
+            params.setdefault("api_key", os.getenv("LITELLM_API_KEY"))
+            params.setdefault("api_base", os.getenv("LITELLM_API_BASE"))
+            params.setdefault("api_version", os.getenv("LITELLM_API_VERSION"))
+            params.setdefault("custom_llm_provider", os.getenv("LITELLM_PROVIDER"))
+            return cls.create("litellm", **params)
         
         # Check Ollama
         if os.getenv("OLLAMA_HOST") or os.getenv("OLLAMA_BASE_URL"):
             return cls.create("ollama", **kwargs)
+
+        if os.getenv("LM_STUDIO_BASE_URL"):
+            return cls.create("lmstudio", **kwargs)
         
         return None

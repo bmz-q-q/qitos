@@ -5,6 +5,9 @@ QitOS Models Module
 
 提供多种模型支持：
 - OpenAI (GPT-4, GPT-3.5)
+- Anthropic (Claude native Messages API)
+- Google Gemini (native generateContent API)
+- LiteLLM
 - OpenAI 兼容 (Azure, 通义千问, 智谱 AI 等)
 - 本地模型 (Ollama, LM Studio, vLLM)
 
@@ -23,6 +26,10 @@ Usage:
 """
 
 from .base import Model, AsyncModel, ModelFactory
+from .context_registry import infer_context_window
+from .anthropic import AnthropicModel
+from .gemini import GeminiModel
+from .litellm import LiteLLMModel
 from .openai import OpenAIModel, OpenAICompatibleModel, AzureOpenAIModel
 from .local import (
     OllamaModel,
@@ -36,11 +43,15 @@ __all__ = [
     "Model",
     "AsyncModel",
     "ModelFactory",
+    "infer_context_window",
     
     # OpenAI
     "OpenAIModel",
     "OpenAICompatibleModel",
     "AzureOpenAIModel",
+    "AnthropicModel",
+    "GeminiModel",
+    "LiteLLMModel",
     
     # 本地模型
     "OllamaModel",

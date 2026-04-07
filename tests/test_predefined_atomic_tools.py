@@ -1,17 +1,18 @@
 from __future__ import annotations
 
 import json
+import warnings
 from pathlib import Path
 
 from qitos.core.tool_registry import ToolRegistry
+from qitos.kit.tool.advanced import AdvancedCodingToolSet
+from qitos.kit.tool.experimental.security_research import SecurityAuditToolSet, security_audit_tools, security_research_tools
 from qitos.kit.tool import (
     CodebaseToolSet,
     CodingToolSet,
     NotebookToolSet,
     ReportToolSet,
     TaskToolSet,
-    WebFetch,
-    WriteFile,
     math_tools,
     coding_tools,
     codebase_tools,
@@ -20,6 +21,7 @@ from qitos.kit.tool import (
     task_tools,
     web_tools,
 )
+from qitos.kit.tool.tools import advanced_coding_tools
 
 
 def test_codebase_toolset_glob_grep_read_append(tmp_path):
@@ -28,7 +30,9 @@ def test_codebase_toolset_glob_grep_read_append(tmp_path):
     (root / "src" / "a.py").write_text("def add(a, b):\n    return a + b\n", encoding="utf-8")
     (root / "src" / "b.md").write_text("hello world\nhello qitos\n", encoding="utf-8")
 
-    toolset = CodebaseToolSet(workspace_root=str(root))
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        toolset = CodebaseToolSet(workspace_root=str(root))
 
     glob_out = toolset.glob_files.run(pattern="*.py")
     assert glob_out["status"] == "success"
@@ -80,19 +84,25 @@ def test_notebook_toolset_read_replace_insert(tmp_path):
 
 
 def test_web_fetch_extracts_text(monkeypatch):
-    tool = WebFetch()
+    toolset = CodingToolSet(include_notebook=False, enable_lsp=False, enable_tasks=False, enable_web=True)
 
-    def _fake_get(url: str, timeout=None):
+    def _fake_get(url: str, params=None, headers=None, timeout=None, verify_tls=True, allow_redirects=True):
+        _ = params
+        _ = headers
+        _ = timeout
+        _ = verify_tls
+        _ = allow_redirects
         return {
             "status": "success",
             "url": url,
             "status_code": 200,
             "content_type": "text/html",
             "content": "<html><head><title>Demo</title></head><body><h1>Hello</h1><p>World</p></body></html>",
+            "headers": {},
         }
 
-    monkeypatch.setattr(tool._http, "run", _fake_get)
-    out = tool.run(url="https://example.com")
+    monkeypatch.setattr(toolset, "http_get", _fake_get)
+    out = toolset.web_fetch(url="https://example.com")
     assert out["status"] == "success"
     assert out["title"] == "Demo"
     assert "Hello" in out["content"]
@@ -103,8 +113,10 @@ def test_predefined_registry_builders_expose_atomic_tools(tmp_path):
     notebook_registry = notebook_tools(str(tmp_path))
     web_registry = web_tools()
     coding_registry = coding_tools(str(tmp_path))
+    advanced_registry = advanced_coding_tools(str(tmp_path))
     task_registry = task_tools(str(tmp_path))
     report_registry = report_tools(str(tmp_path))
+    audit_registry = security_audit_tools(str(tmp_path))
 
     assert "codebase.glob_files" in code_registry.list_tools()
     assert "codebase.grep_files" in code_registry.list_tools()
@@ -117,13 +129,24 @@ def test_predefined_registry_builders_expose_atomic_tools(tmp_path):
     assert "view" in coding_registry.list_tools()
     assert "glob_files" in coding_registry.list_tools()
     assert "run_command" in coding_registry.list_tools()
+    assert "todo_write" in coding_registry.list_tools()
+    assert "tool_search" in coding_registry.list_tools()
+    assert "bash_v2" in coding_registry.list_tools()
+    assert "bash_v2" in advanced_registry.list_tools()
+    assert "file_read_v2" in advanced_registry.list_tools()
+    assert "file_edit_v2" in advanced_registry.list_tools()
+    assert "tool_search" in advanced_registry.list_tools()
     assert "task_create" in task_registry.list_tools()
     assert "task_update" in task_registry.list_tools()
     assert "finding_add" in report_registry.list_tools()
     assert "generate_report" in report_registry.list_tools()
+    assert "audit_inventory" in audit_registry.list_tools()
+    assert "audit_hotspots" in audit_registry.list_tools()
 
     reg = ToolRegistry()
-    reg.register_toolset(CodebaseToolSet(workspace_root=str(tmp_path)))
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        reg.register_toolset(CodebaseToolSet(workspace_root=str(tmp_path)))
     assert reg.describe_tool("codebase.read_file_range")["origin"]["source"] == "toolset"
 
 
@@ -135,13 +158,22 @@ def test_coding_toolset_collects_editor_shell_and_codebase(tmp_path):
     assert "run_command" in names
     assert "view" in names
     assert "glob_files" in names
+    assert "tool_search" in names
     assert "read_notebook" in names
 
 
+def test_advanced_coding_toolset_registers_cleanly(tmp_path):
+    toolset = AdvancedCodingToolSet(workspace_root=str(tmp_path))
+    registry = ToolRegistry()
+    registry.register_toolset(toolset, namespace="")
+    assert "web_fetch_v2" in registry.list_tools()
+    assert "todo_write" in registry.list_tools()
+
+
 def test_tool_descriptions_come_from_docstrings():
-    write_file = WriteFile()
-    assert "Write text content to a file under the workspace root." in write_file.spec.description
-    assert ":param filename:" in write_file.spec.description
+    write_file = coding_tools(".").describe_tool("write_file")
+    assert "Write text content to a workspace file." in write_file["description"]
+    assert ":param filename:" in write_file["description"]
 
     registry = web_tools()
     spec = next(item for item in registry.get_all_specs() if item["function"]["name"] == "extract_web_text")
@@ -151,6 +183,14 @@ def test_tool_descriptions_come_from_docstrings():
     math_spec = math_tools().describe_tool("add")
     assert "Return the sum of two integers." in math_spec["description"]
     assert ":param a:" in math_spec["description"]
+
+
+def test_legacy_tool_adapters_emit_deprecation_warnings(tmp_path):
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always", DeprecationWarning)
+        _ = CodebaseToolSet(workspace_root=str(tmp_path))
+    messages = [str(item.message) for item in caught]
+    assert any("CodebaseToolSet is deprecated" in message for message in messages)
 
 
 def test_task_toolset_persists_board_updates(tmp_path):
@@ -201,3 +241,25 @@ def test_report_toolset_registers_and_writes_outputs(tmp_path):
     report = toolset.generate_report(format="markdown")
     assert report["status"] == "success"
     assert Path(report["data"]["output_file"]).exists()
+
+
+def test_security_audit_toolset_registers_cleanly(tmp_path):
+    toolset = SecurityAuditToolSet(workspace_root=str(tmp_path))
+    registry = ToolRegistry()
+    registry.register_toolset(toolset, namespace="")
+    assert "audit_inventory" in registry.list_tools()
+    assert "audit_notes_scan" in registry.list_tools()
+
+
+def test_security_research_tools_require_explicit_import(tmp_path):
+    registry = security_research_tools(
+        str(tmp_path),
+        include_authorized_ops=True,
+        authorized_targets=["example.com"],
+    )
+    names = set(registry.list_tools())
+    assert "audit_inventory" in names
+    assert "port_scan" in names
+    assert "msf_check" in names
+    assert "john_crack" in names
+    assert "nuclei_scan" in names

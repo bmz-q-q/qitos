@@ -90,6 +90,7 @@ class AgentModule(ABC, Generic[StateT, ObservationT, ActionT]):
         critics: List[Any] | None = None,
         stop_criteria: List[Any] | None = None,
         history_policy: Any = None,
+        context_config: Any = None,
         trace: Any = None,
         render: Any = None,
         trace_logdir: str = "./runs",
@@ -109,6 +110,7 @@ class AgentModule(ABC, Generic[StateT, ObservationT, ActionT]):
             critics=critics,
             stop_criteria=stop_criteria,
             history_policy=history_policy,
+            context_config=context_config,
             trace=trace,
             render=render,
             trace_logdir=trace_logdir,
@@ -162,6 +164,7 @@ class AgentModule(ABC, Generic[StateT, ObservationT, ActionT]):
         critics: List[Any] | None,
         stop_criteria: List[Any] | None,
         history_policy: Any,
+        context_config: Any,
         trace: Any,
         render: Any,
         trace_logdir: str,
@@ -197,6 +200,8 @@ class AgentModule(ABC, Generic[StateT, ObservationT, ActionT]):
             kwargs["stop_criteria"] = stop_criteria
         if history_policy is not None:
             kwargs["history_policy"] = history_policy
+        if context_config is not None:
+            kwargs["context_config"] = context_config
 
         trace_setting = trace
         if trace_setting is None and "trace_writer" not in kwargs:

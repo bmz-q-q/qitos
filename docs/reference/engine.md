@@ -9,6 +9,8 @@
 - action execution dispatch
 - budgets and stop criteria
 - hooks/events/trace
+- default-on context length telemetry for LLM calls
+- default-on context compaction when runtime history supports it
 
 ## Runtime chain
 
@@ -34,10 +36,35 @@ When `decide` returns `None`, Engine does:
 
 - `env`
 - `history_policy`
+- `context_config`
 - `search`
 - `critics`
 - `hooks`
 - `trace_writer`
+
+## Context Management
+
+For LLM agents, Engine now tracks per-request context telemetry by default:
+
+- `input_tokens_total`
+- `output_tokens`
+- `history_tokens`
+- `prepared_tokens`
+- `occupancy_ratio`
+- cumulative run token totals
+
+QiTOS also infers a more accurate default `context_window` from common model ids
+before falling back to the generic runtime default. If you know your model runs
+with a different limit, you can still override it explicitly on the model
+adapter.
+
+When runtime history emits compaction telemetry, Engine surfaces it in:
+
+- runtime events
+- `records[*].context`
+- trace manifest summary
+- terminal UI
+- qita board/view/replay
 
 For most users, the preferred entry point is still:
 

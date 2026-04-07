@@ -21,14 +21,22 @@ from .core.task import (
     TaskResource,
     TaskResult,
 )
-from .core.tool import tool
+from .core.tool import (
+    ToolPermissionContext,
+    ToolPermissionDecision,
+    ToolPermissionRule,
+    ToolValidationResult,
+    tool,
+)
 from .core.tool_registry import ToolRegistry
 from .engine.engine import Engine, EngineResult
+from .engine.states import ContextConfig
 
 __all__ = [
     "AgentModule",
     "Engine",
     "EngineResult",
+    "ContextConfig",
     "Task",
     "TaskResource",
     "TaskBudget",
@@ -42,6 +50,10 @@ __all__ = [
     "Env",
     "EnvSpec",
     "tool",
+    "ToolPermissionContext",
+    "ToolPermissionDecision",
+    "ToolPermissionRule",
+    "ToolValidationResult",
     "ToolRegistry",
     "StopReason",
     "QitosRuntimeError",

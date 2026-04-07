@@ -48,7 +48,7 @@ setup(
         "pyyaml>=6.0",
     ],
     extras_require={
-        "models": ["openai>=1.0.0"],
+        "models": ["openai>=1.0.0", "litellm>=1.52.0"],
         "yaml": ["pyyaml>=6.0"],
         "benchmarks": ["datasets>=2.20.0", "huggingface_hub>=0.24.0"],
         "dev": [
@@ -62,6 +62,7 @@ setup(
         ],
         "all": [
             "openai>=1.0.0",
+            "litellm>=1.52.0",
             "pyyaml>=6.0",
             "datasets>=2.20.0",
             "huggingface_hub>=0.24.0",

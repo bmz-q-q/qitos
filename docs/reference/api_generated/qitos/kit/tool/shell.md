@@ -13,7 +13,7 @@
 
 <a id="class-runcommand"></a>
 ???+ note "Class: `RunCommand(self, timeout: 'int' = 30, cwd: 'str' = '.', env: 'Optional[Dict[str, str]]' = None)`"
-    Run one shell command inside the configured workspace directory.
+    Deprecated adapter for the legacy run_command tool.
 
 ## Functions
 

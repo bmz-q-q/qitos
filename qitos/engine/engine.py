@@ -7,7 +7,6 @@ from dataclasses import dataclass
 from typing import Any, Callable, Dict, Generic, List, Optional, TypeVar
 from uuid import uuid4
 
-from ..core.action import Action
 from ..core.agent_module import AgentModule
 from ..core.decision import Decision
 from ..core.errors import ErrorCategory, StopReason
@@ -18,6 +17,7 @@ from ..core.state import StateSchema
 from ..core.task import Task, TaskResult, TaskValidationIssue
 from ..trace import TraceWriter
 from ._action_runtime import _ActionRuntime
+from ._context_runtime import _ContextRuntime
 from ._control_runtime import _ControlRuntime
 from ._env_runtime import _EnvRuntime
 from ._model_runtime import _ModelRuntime
@@ -29,7 +29,7 @@ from .hooks import EngineHook, HookContext
 from .parser import Parser
 from .recovery import RecoveryPolicy, build_failure_report
 from .search import Search
-from .states import RuntimeBudget, RuntimeEvent, RuntimePhase, StepRecord
+from .states import ContextConfig, RuntimeBudget, RuntimeEvent, RuntimePhase, StepRecord
 from .stop_criteria import FinalResultCriteria, StopCriteria
 from .validation import StateValidationGate
 
@@ -114,6 +114,7 @@ class Engine(Generic[StateT, ObservationT, ActionT]):
         history_policy: Optional[HistoryPolicy] = None,
         hooks: Optional[List[EngineHook]] = None,
         render_hooks: Optional[List[Any]] = None,
+        context_config: Optional[ContextConfig | Dict[str, Any]] = None,
     ):
         self.agent = agent
         self.tool_registry = agent.tool_registry
@@ -133,15 +134,18 @@ class Engine(Generic[StateT, ObservationT, ActionT]):
         self.critics = critics or []
         self.env = env
         self.history_policy = history_policy or HistoryPolicy()
+        self.context_config = context_config if isinstance(context_config, ContextConfig) else ContextConfig(
+            **dict(context_config or {})
+        )
         self.hooks: List[Any] = list(hooks or [])
         if render_hooks:
             self.hooks.extend(render_hooks)
         if stop_criteria is None:
             self._uses_default_stop_criteria = True
-            self.stop_criteria = [FinalResultCriteria()]
+            self.stop_criteria: List[StopCriteria] = [FinalResultCriteria()]
         else:
             self._uses_default_stop_criteria = False
-            self.stop_criteria = stop_criteria
+            self.stop_criteria = list(stop_criteria)
 
         self.executor = ActionExecutor(tool_registry=self.tool_registry) if self.tool_registry is not None else None
         self.events: List[RuntimeEvent] = []
@@ -155,11 +159,14 @@ class Engine(Generic[StateT, ObservationT, ActionT]):
         self._active_run_id: str = ""
         self._runtime_history: History = _EngineWindowHistory(window_size=24)
         self._last_system_prompt: str = ""
-        self._model_runtime = _ModelRuntime(self)
-        self._action_runtime = _ActionRuntime(self)
-        self._env_runtime = _EnvRuntime(self)
-        self._control_runtime = _ControlRuntime(self)
-        self._trace_runtime = _TraceRuntime(self)
+        self._last_context_telemetry: Dict[str, Any] = {}
+        self._model_runtime: _ModelRuntime[StateT, ObservationT, ActionT] = _ModelRuntime(self)
+        self._action_runtime: _ActionRuntime[StateT, ActionT] = _ActionRuntime(self)
+        self._env_runtime: _EnvRuntime[StateT, ObservationT, ActionT] = _EnvRuntime(self)
+        self._control_runtime: _ControlRuntime[StateT, ObservationT, ActionT] = _ControlRuntime(self)
+        self._trace_runtime: _TraceRuntime[StateT] = _TraceRuntime(self)
+        self._context_runtime = _ContextRuntime(self)
+        self._context_runtime.apply_config(self.context_config)
 
     def register_hook(self, hook: Any) -> None:
         """Register one runtime hook instance."""
@@ -197,6 +204,8 @@ class Engine(Generic[StateT, ObservationT, ActionT]):
         task_obj, task_text = self._normalize_task(task)
         self._apply_task_budget(task_obj)
         self._token_usage = 0
+        self._last_context_telemetry = {}
+        self._context_runtime.reset()
         state = self.agent.init_state(task_text, **kwargs)
         self._memory_append(
             "task",
@@ -384,7 +393,8 @@ class Engine(Generic[StateT, ObservationT, ActionT]):
                     "stop_reason": state.stop_reason,
                     "final_result": state.final_result,
                     "steps": len(self.records),
-                    "token_usage": self._token_usage,
+                    "token_usage": self._context_runtime.tokens_total,
+                    "context": self._context_runtime.run_summary(),
                     "task_meta": self._task_meta(task_obj),
                     "task_result": self._build_task_result(state, task_obj=task_obj, started_at=started_at).to_dict(),
                     "run_meta": self._run_meta(),
@@ -534,6 +544,20 @@ class Engine(Generic[StateT, ObservationT, ActionT]):
         hist = getattr(self.agent, "history", None)
         if isinstance(hist, History):
             return hist
+        if getattr(self.agent, "llm", None) is not None and self.context_config.enabled:
+            try:
+                from ..kit.history import CompactHistory
+
+                if not isinstance(self._runtime_history, CompactHistory):
+                    self._runtime_history = CompactHistory(
+                        llm=getattr(self.agent, "llm", None),
+                        max_tokens=max(
+                            1024,
+                            int((self._context_runtime.resolve_request_budget(getattr(self.agent, "llm", None)).get("available_input_budget") or 16000)),
+                        ),
+                    )
+            except Exception:
+                pass
         return self._runtime_history
 
     def _history_append(

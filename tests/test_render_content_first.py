@@ -50,7 +50,7 @@ def test_content_first_renderer_core_blocks() -> None:
     assert obs.get("title") == "Search Results"
 
 
-def test_claude_style_hook_ignores_model_input_payload() -> None:
+def test_claude_style_hook_shows_context_state_without_dumping_messages() -> None:
     hook = ClaudeStyleHook(max_preview_chars=200)
     hook.console = Console(record=True, width=120)
 
@@ -71,7 +71,10 @@ def test_claude_style_hook_ignores_model_input_payload() -> None:
             channel="thinking",
             node="model_input",
             step_id=0,
-            payload={"messages": [{"role": "user", "content": "very long history"}]},
+            payload={
+                "messages": [{"role": "user", "content": "very long history"}],
+                "context": {"input_tokens_total": 512, "occupancy_ratio": 0.42, "history_tokens": 320, "output_tokens": 0},
+            },
         )
     )
     hook.on_render_event(
@@ -85,7 +88,8 @@ def test_claude_style_hook_ignores_model_input_payload() -> None:
 
     text = hook.console.export_text()
     assert "State" in text
-    assert "sp_toks" in text
+    assert "ctx_used" in text
+    assert "ctx_pct" in text
     assert "⦿" in text
     assert "web_search first" in text
     assert "very long history" not in text

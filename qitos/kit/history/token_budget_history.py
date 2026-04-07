@@ -21,6 +21,8 @@ class TokenBudgetSummaryHistory(History):
         self.keep_last = int(keep_last)
         self.hard_window = int(hard_window)
         self._messages: List[HistoryMessage] = []
+        self._pending_runtime_events: List[Dict[str, Any]] = []
+        self._last_message_metadata: List[Dict[str, Any]] = []
 
     def append(self, message: HistoryMessage) -> None:
         self._messages.append(message)
@@ -40,17 +42,82 @@ class TokenBudgetSummaryHistory(History):
 
         budget = int(query.get("max_tokens") or self.max_tokens)
         pending = str(query.get("pending_content") or "")
+        pending_tokens = self._estimate_text_tokens(pending)
+        before_tokens = self._estimate_tokens(items) + pending_tokens
+        events: List[Dict[str, Any]] = []
+        metadata = [self._metadata_for_message(m) for m in items]
         if budget <= 0:
+            events.append(
+                {
+                    "stage": "context_history",
+                    "context": {
+                        "stage": "within_budget",
+                        "before_tokens": before_tokens,
+                        "after_tokens": before_tokens,
+                        "saved_tokens": 0,
+                        "budget": None,
+                        "pending_tokens": pending_tokens,
+                        "messages_before": len(items),
+                        "messages_after": len(items),
+                        "strategy": "token_budget_summary",
+                        "warning_ratio": query.get("warning_ratio"),
+                    },
+                }
+            )
+            self._pending_runtime_events = events
+            self._last_message_metadata = metadata
             return items
-        if self._estimate_tokens(items) + self._estimate_text_tokens(pending) <= budget:
+        if before_tokens <= budget:
+            events.append(
+                {
+                    "stage": "context_history",
+                    "context": {
+                        "stage": "within_budget",
+                        "before_tokens": before_tokens,
+                        "after_tokens": before_tokens,
+                        "saved_tokens": 0,
+                        "budget": budget,
+                        "pending_tokens": pending_tokens,
+                        "messages_before": len(items),
+                        "messages_after": len(items),
+                        "strategy": "token_budget_summary",
+                        "warning_ratio": query.get("warning_ratio"),
+                    },
+                }
+            )
+            self._pending_runtime_events = events
+            self._last_message_metadata = metadata
             return items
 
         if len(items) <= self.keep_last:
-            return items[-self.keep_last :]
+            result = items[-self.keep_last :]
+            events.append(
+                {
+                    "stage": "context_history",
+                    "context": {
+                        "stage": "compact_skipped",
+                        "before_tokens": before_tokens,
+                        "after_tokens": self._estimate_tokens(result) + pending_tokens,
+                        "saved_tokens": max(0, before_tokens - (self._estimate_tokens(result) + pending_tokens)),
+                        "budget": budget,
+                        "pending_tokens": pending_tokens,
+                        "messages_before": len(items),
+                        "messages_after": len(result),
+                        "strategy": "token_budget_summary",
+                        "warning_ratio": query.get("warning_ratio"),
+                        "reason": "keep_last_floor",
+                    },
+                }
+            )
+            self._pending_runtime_events = events
+            self._last_message_metadata = [self._metadata_for_message(m) for m in result]
+            return result
 
         recent = items[-self.keep_last :]
         old = items[: -self.keep_last]
         if not old:
+            self._pending_runtime_events = events
+            self._last_message_metadata = metadata
             return recent
         summary = self._summarize_messages(old)
         summary_message = HistoryMessage(
@@ -59,7 +126,46 @@ class TokenBudgetSummaryHistory(History):
             step_id=old[-1].step_id,
             metadata={"source": "token_budget_summary", "summary": True},
         )
-        return [summary_message, *recent]
+        result = [summary_message, *recent]
+        after_tokens = self._estimate_tokens(result) + pending_tokens
+        events.extend(
+            [
+                {
+                    "stage": "context_history",
+                    "context": {
+                        "stage": "warning",
+                        "before_tokens": before_tokens,
+                        "after_tokens": before_tokens,
+                        "saved_tokens": 0,
+                        "budget": budget,
+                        "pending_tokens": pending_tokens,
+                        "messages_before": len(items),
+                        "messages_after": len(items),
+                        "strategy": "token_budget_summary",
+                        "warning_ratio": query.get("warning_ratio"),
+                    },
+                },
+                {
+                    "stage": "context_history",
+                    "context": {
+                        "stage": "summary_compact_applied",
+                        "before_tokens": before_tokens,
+                        "after_tokens": after_tokens,
+                        "saved_tokens": max(0, before_tokens - after_tokens),
+                        "budget": budget,
+                        "pending_tokens": pending_tokens,
+                        "messages_before": len(items),
+                        "messages_after": len(result),
+                        "strategy": "token_budget_summary",
+                        "warning_ratio": query.get("warning_ratio"),
+                        "summarized_message_count": len(old),
+                    },
+                },
+            ]
+        )
+        self._pending_runtime_events = events
+        self._last_message_metadata = [self._metadata_for_message(m) for m in result]
+        return result
 
     def summarize(self, max_items: int = 5) -> str:
         items = self.retrieve(query={"max_items": max_items})
@@ -74,6 +180,16 @@ class TokenBudgetSummaryHistory(History):
 
     def reset(self, run_id: Optional[str] = None) -> None:
         self._messages = []
+        self._pending_runtime_events = []
+        self._last_message_metadata = []
+
+    def consume_runtime_events(self) -> List[Dict[str, Any]]:
+        events = list(self._pending_runtime_events)
+        self._pending_runtime_events = []
+        return events
+
+    def get_last_message_metadata(self) -> List[Dict[str, Any]]:
+        return list(self._last_message_metadata)
 
     def _filter_messages(self, query: Dict[str, Any]) -> List[HistoryMessage]:
         items = list(self._messages)
@@ -129,6 +245,13 @@ class TokenBudgetSummaryHistory(History):
         if not s:
             return 0
         return max(1, len(s) // 4)
+
+    def _metadata_for_message(self, message: HistoryMessage) -> Dict[str, Any]:
+        meta = dict(message.metadata or {})
+        meta.setdefault("role", message.role)
+        meta.setdefault("step_id", message.step_id)
+        meta.setdefault("content_chars", len(str(message.content or "")))
+        return meta
 
 
 __all__ = ["TokenBudgetSummaryHistory"]

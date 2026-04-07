@@ -17,8 +17,8 @@
     TraceEvent(run_id: 'str', step_id: 'int', phase: 'str', ok: 'bool' = True, payload: 'Dict[str, Any]' = <factory>, error: 'Optional[str]' = None, ts: 'str' = <factory>)
 
 <a id="class-tracestep"></a>
-???+ note "Class: `TraceStep(self, step_id: 'int', observation: 'Any' = None, decision: 'Any' = None, actions: 'List[Any]' = <factory>, action_results: 'List[Any]' = <factory>, tool_invocations: 'List[Any]' = <factory>, critic_outputs: 'List[Any]' = <factory>, state_diff: 'Dict[str, Any]' = <factory>) -> None`"
-    TraceStep(step_id: 'int', observation: 'Any' = None, decision: 'Any' = None, actions: 'List[Any]' = <factory>, action_results: 'List[Any]' = <factory>, tool_invocations: 'List[Any]' = <factory>, critic_outputs: 'List[Any]' = <factory>, state_diff: 'Dict[str, Any]' = <factory>)
+???+ note "Class: `TraceStep(self, step_id: 'int', observation: 'Any' = None, decision: 'Any' = None, actions: 'List[Any]' = <factory>, action_results: 'List[Any]' = <factory>, tool_invocations: 'List[Any]' = <factory>, critic_outputs: 'List[Any]' = <factory>, state_diff: 'Dict[str, Any]' = <factory>, context: 'Dict[str, Any]' = <factory>) -> None`"
+    TraceStep(step_id: 'int', observation: 'Any' = None, decision: 'Any' = None, actions: 'List[Any]' = <factory>, action_results: 'List[Any]' = <factory>, tool_invocations: 'List[Any]' = <factory>, critic_outputs: 'List[Any]' = <factory>, state_diff: 'Dict[str, Any]' = <factory>, context: 'Dict[str, Any]' = <factory>)
 
 ## Functions
 

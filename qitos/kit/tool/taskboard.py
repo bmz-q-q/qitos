@@ -154,15 +154,7 @@ class CreateTask(BaseTool):
             )
         )
 
-    def run(
-        self,
-        subject: str,
-        description: str,
-        active_form: str = "",
-        metadata: Optional[Dict[str, Any]] = None,
-        status: str = "pending",
-        runtime_context: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+    def execute(self, args: Dict[str, Any], runtime_context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         Create a new task record in the task board.
 
@@ -176,6 +168,11 @@ class CreateTask(BaseTool):
         Returns the created task record and the task board location.
         """
         _ = runtime_context
+        subject = str(args.get("subject", ""))
+        description = str(args.get("description", ""))
+        active_form = str(args.get("active_form", ""))
+        metadata = args.get("metadata")
+        status = str(args.get("status", "pending"))
         normalized = str(status or "pending").strip()
         if normalized not in TASK_STATUSES:
             return {"status": "error", "message": f"Unsupported status: {normalized}"}
@@ -213,12 +210,7 @@ class ListTaskBoard(BaseTool):
             )
         )
 
-    def run(
-        self,
-        status: str = "",
-        include_completed: bool = True,
-        runtime_context: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+    def execute(self, args: Dict[str, Any], runtime_context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         List task records from the task board.
 
@@ -229,6 +221,8 @@ class ListTaskBoard(BaseTool):
         Returns the filtered task list and the backing board path.
         """
         _ = runtime_context
+        status = str(args.get("status", ""))
+        include_completed = bool(args.get("include_completed", True))
         tasks = self._store.list_tasks()
         if status:
             tasks = [task for task in tasks if task.status == status]
@@ -257,7 +251,7 @@ class GetTask(BaseTool):
             )
         )
 
-    def run(self, task_id: str, runtime_context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    def execute(self, args: Dict[str, Any], runtime_context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         Fetch one task record by id.
 
@@ -267,6 +261,7 @@ class GetTask(BaseTool):
         Returns the matching task and the task board location.
         """
         _ = runtime_context
+        task_id = str(args.get("task_id", ""))
         task = self._store.get_task(task_id)
         if task is None:
             return {"status": "error", "message": f"Task not found: {task_id}"}
@@ -304,21 +299,7 @@ class UpdateTask(BaseTool):
             )
         )
 
-    def run(
-        self,
-        task_id: str,
-        subject: Optional[str] = None,
-        description: Optional[str] = None,
-        active_form: Optional[str] = None,
-        status: Optional[str] = None,
-        owner: Optional[str] = None,
-        add_blocks: Optional[List[str]] = None,
-        remove_blocks: Optional[List[str]] = None,
-        add_blocked_by: Optional[List[str]] = None,
-        remove_blocked_by: Optional[List[str]] = None,
-        metadata: Optional[Dict[str, Any]] = None,
-        runtime_context: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+    def execute(self, args: Dict[str, Any], runtime_context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         Update fields, status, ownership, or dependency links for one task.
 
@@ -338,6 +319,17 @@ class UpdateTask(BaseTool):
         Metadata keys with value `None` are removed from the record.
         """
         _ = runtime_context
+        task_id = str(args.get("task_id", ""))
+        subject = args.get("subject")
+        description = args.get("description")
+        active_form = args.get("active_form")
+        status = args.get("status")
+        owner = args.get("owner")
+        add_blocks = args.get("add_blocks")
+        remove_blocks = args.get("remove_blocks")
+        add_blocked_by = args.get("add_blocked_by")
+        remove_blocked_by = args.get("remove_blocked_by")
+        metadata = args.get("metadata")
         task = self._store.get_task(task_id)
         if task is None:
             return {"status": "error", "message": f"Task not found: {task_id}"}
@@ -354,17 +346,17 @@ class UpdateTask(BaseTool):
             task.active_form = active_form
         if owner is not None:
             task.owner = owner
-        if add_blocks:
+        if isinstance(add_blocks, list) and add_blocks:
             task.blocks = sorted({*task.blocks, *[str(x) for x in add_blocks if str(x).strip()]})
-        if remove_blocks:
+        if isinstance(remove_blocks, list) and remove_blocks:
             remove_set = {str(x) for x in remove_blocks}
             task.blocks = [x for x in task.blocks if x not in remove_set]
-        if add_blocked_by:
+        if isinstance(add_blocked_by, list) and add_blocked_by:
             task.blocked_by = sorted({*task.blocked_by, *[str(x) for x in add_blocked_by if str(x).strip()]})
-        if remove_blocked_by:
+        if isinstance(remove_blocked_by, list) and remove_blocked_by:
             remove_set = {str(x) for x in remove_blocked_by}
             task.blocked_by = [x for x in task.blocked_by if x not in remove_set]
-        if metadata:
+        if isinstance(metadata, dict) and metadata:
             merged = dict(task.metadata)
             for key, value in metadata.items():
                 if value is None:
@@ -396,13 +388,7 @@ class AppendTaskNote(BaseTool):
             )
         )
 
-    def run(
-        self,
-        task_id: str,
-        text: str,
-        kind: str = "note",
-        runtime_context: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+    def execute(self, args: Dict[str, Any], runtime_context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         Append a timestamped note to one task record.
 
@@ -414,6 +400,9 @@ class AppendTaskNote(BaseTool):
         Returns the updated note count for the task.
         """
         _ = runtime_context
+        task_id = str(args.get("task_id", ""))
+        text = str(args.get("text", ""))
+        kind = str(args.get("kind", "note"))
         task = self._store.get_task(task_id)
         if task is None:
             return {"status": "error", "message": f"Task not found: {task_id}"}

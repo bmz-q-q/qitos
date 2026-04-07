@@ -233,21 +233,41 @@ class CompactionController:
         if before_tokens >= warning_threshold:
             events.append(
                 {
-                    "stage": "compact_warning",
-                    "compact": {
+                    "stage": "context_history",
+                    "context": {
+                        "stage": "warning",
                         "before_tokens": before_tokens,
+                        "after_tokens": before_tokens,
+                        "saved_tokens": 0,
                         "budget": budget,
+                        "pending_tokens": self._estimate_text_tokens(pending_content),
+                        "messages_before": len(items),
+                        "messages_after": len(items),
+                        "strategy": "compact_history",
+                        "warning_ratio": float(self.config.warning_ratio),
                         "warning_threshold": warning_threshold,
                     },
                 }
             )
 
         if budget <= 0 or before_tokens <= budget:
-            if before_tokens >= warning_threshold and self.config.emit_skipped_events:
+            if before_tokens < warning_threshold or self.config.emit_skipped_events:
                 events.append(
                     {
-                        "stage": "compact_skipped",
-                        "compact": {"reason": "within_budget", "before_tokens": before_tokens, "budget": budget},
+                        "stage": "context_history",
+                        "context": {
+                            "stage": "within_budget",
+                            "before_tokens": before_tokens,
+                            "after_tokens": before_tokens,
+                            "saved_tokens": 0,
+                            "budget": budget,
+                            "pending_tokens": self._estimate_text_tokens(pending_content),
+                            "messages_before": len(items),
+                            "messages_after": len(items),
+                            "strategy": "compact_history",
+                            "warning_ratio": float(self.config.warning_ratio),
+                            "reason": "within_budget",
+                        },
                     }
                 )
             return items, events, metadata
@@ -256,8 +276,20 @@ class CompactionController:
             if self.config.emit_skipped_events:
                 events.append(
                     {
-                        "stage": "compact_skipped",
-                        "compact": {"reason": "auto_compact_disabled", "before_tokens": before_tokens, "budget": budget},
+                        "stage": "context_history",
+                        "context": {
+                            "stage": "compact_skipped",
+                            "before_tokens": before_tokens,
+                            "after_tokens": before_tokens,
+                            "saved_tokens": 0,
+                            "budget": budget,
+                            "pending_tokens": self._estimate_text_tokens(pending_content),
+                            "messages_before": len(items),
+                            "messages_after": len(items),
+                            "strategy": "compact_history",
+                            "warning_ratio": float(self.config.warning_ratio),
+                            "reason": "auto_compact_disabled",
+                        },
                     }
                 )
             return items, events, metadata
@@ -276,11 +308,18 @@ class CompactionController:
             if after_micro_tokens < before_tokens:
                 events.append(
                     {
-                        "stage": "microcompact_applied",
-                        "compact": {
+                        "stage": "context_history",
+                        "context": {
+                            "stage": "microcompact_applied",
                             "before_tokens": before_tokens,
                             "after_tokens": after_micro_tokens,
                             "saved_tokens": max(0, before_tokens - after_micro_tokens),
+                            "budget": budget,
+                            "pending_tokens": self._estimate_text_tokens(pending_content),
+                            "messages_before": len(items),
+                            "messages_after": len(micro_candidate),
+                            "strategy": "compact_history",
+                            "warning_ratio": float(self.config.warning_ratio),
                             "messages_compacted": sum(
                                 1 for msg in compacted_older if msg.metadata.get("compaction_mode") == "micro"
                             ),
@@ -307,11 +346,18 @@ class CompactionController:
             after_summary_tokens = self._estimate_tokens(summary_candidate) + self._estimate_text_tokens(pending_content)
             events.append(
                 {
-                    "stage": "summary_compact_applied",
-                    "compact": {
+                    "stage": "context_history",
+                    "context": {
+                        "stage": "summary_compact_applied",
                         "before_tokens": before_tokens,
                         "after_tokens": after_summary_tokens,
                         "saved_tokens": max(0, before_tokens - after_summary_tokens),
+                        "budget": budget,
+                        "pending_tokens": self._estimate_text_tokens(pending_content),
+                        "messages_before": len(items),
+                        "messages_after": len(summary_candidate),
+                        "strategy": "compact_history",
+                        "warning_ratio": float(self.config.warning_ratio),
                         "summarized_message_count": len(older),
                         "preserved_round_count": len(preserved_groups),
                     },
@@ -325,11 +371,18 @@ class CompactionController:
         if after_tokens < before_tokens:
             events.append(
                 {
-                    "stage": "microcompact_applied",
-                    "compact": {
+                    "stage": "context_history",
+                    "context": {
+                        "stage": "microcompact_applied",
                         "before_tokens": before_tokens,
                         "after_tokens": after_tokens,
                         "saved_tokens": max(0, before_tokens - after_tokens),
+                        "budget": budget,
+                        "pending_tokens": self._estimate_text_tokens(pending_content),
+                        "messages_before": len(items),
+                        "messages_after": len(compacted),
+                        "strategy": "compact_history",
+                        "warning_ratio": float(self.config.warning_ratio),
                         "messages_compacted": sum(
                             1 for msg in compacted if msg.metadata.get("compaction_mode") == "micro"
                         ),
@@ -343,8 +396,20 @@ class CompactionController:
         if self.config.emit_skipped_events:
             events.append(
                 {
-                    "stage": "compact_skipped",
-                    "compact": {"reason": "insufficient_prefix_to_compact", "before_tokens": before_tokens, "budget": budget},
+                    "stage": "context_history",
+                    "context": {
+                        "stage": "compact_skipped",
+                        "before_tokens": before_tokens,
+                        "after_tokens": before_tokens,
+                        "saved_tokens": 0,
+                        "budget": budget,
+                        "pending_tokens": self._estimate_text_tokens(pending_content),
+                        "messages_before": len(items),
+                        "messages_after": len(items),
+                        "strategy": "compact_history",
+                        "warning_ratio": float(self.config.warning_ratio),
+                        "reason": "insufficient_prefix_to_compact",
+                    },
                 }
             )
         return self._trim_to_budget(items, budget=budget, pending_content=pending_content), events, metadata

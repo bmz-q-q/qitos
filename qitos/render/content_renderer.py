@@ -114,6 +114,17 @@ class ContentFirstRenderer:
 
     def state_summary(self, event: RenderEvent) -> Optional[Dict[str, Any]]:
         """Extract compact state stats from state snapshot payload."""
+        if event.node == "model_input":
+            payload = event.payload or {}
+            stats = dict(payload.get("state_stats") or {})
+            ctx = payload.get("context") if isinstance(payload.get("context"), dict) else {}
+            if ctx:
+                stats.setdefault("input_tokens_total", ctx.get("input_tokens_total"))
+                stats.setdefault("history_tokens", ctx.get("history_tokens"))
+                stats.setdefault("output_tokens", ctx.get("output_tokens"))
+                stats.setdefault("occupancy_ratio", ctx.get("occupancy_ratio"))
+                stats.setdefault("context_window", ctx.get("context_window"))
+            return stats or None
         if event.node not in {"state", "observation"}:
             return None
         payload = event.payload or {}
@@ -148,6 +159,48 @@ class ContentFirstRenderer:
         if isinstance(workspace_files, list):
             stats["workspace_files"] = len(workspace_files)
         return stats
+
+    def compact_summary(self, event: RenderEvent) -> Optional[Dict[str, Any]]:
+        payload = event.payload or {}
+        if event.node != "context_history":
+            return None
+        ctx = payload.get("context")
+        if not isinstance(ctx, dict):
+            return None
+        stage = str(ctx.get("stage") or "")
+        before = ctx.get("before_tokens")
+        after = ctx.get("after_tokens")
+        saved = ctx.get("saved_tokens")
+        budget = ctx.get("budget")
+        occupancy = ctx.get("occupancy_ratio")
+        if stage == "warning":
+            ratio = ""
+            if isinstance(occupancy, (int, float)):
+                ratio = f" ({occupancy * 100:.1f}%)"
+            return {
+                "color": "yellow",
+                "text": f"Context warning · {before:,} / {budget:,}{ratio}" if isinstance(before, int) and isinstance(budget, int) else "Context warning",
+            }
+        if stage == "microcompact_applied":
+            return {
+                "color": "blue",
+                "text": f"Compacted history · {before:,} -> {after:,} · saved {saved:,}"
+                if all(isinstance(x, int) for x in (before, after, saved))
+                else "Compacted history",
+            }
+        if stage == "summary_compact_applied":
+            return {
+                "color": "cyan",
+                "text": f"Summarized earlier rounds · {before:,} -> {after:,} · saved {saved:,}"
+                if all(isinstance(x, int) for x in (before, after, saved))
+                else "Summarized earlier rounds",
+            }
+        if stage == "compact_skipped":
+            reason = str(ctx.get("reason") or "skipped")
+            return {"color": "gray50", "text": f"Compact skipped · {reason}"}
+        if stage == "within_budget":
+            return None
+        return {"color": "gray50", "text": stage}
 
     def memory_summary(self, event: RenderEvent) -> Optional[str]:
         if event.node != "memory_context":

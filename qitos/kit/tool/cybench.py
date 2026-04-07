@@ -29,7 +29,7 @@ class SubmitAnswer(BaseTool):
             )
         )
 
-    def run(self, answer: str, subtask_index: Optional[int] = None, runtime_context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    def execute(self, args: Dict[str, Any], runtime_context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         Submit one final answer candidate for the active CyBench task.
 
@@ -39,11 +39,15 @@ class SubmitAnswer(BaseTool):
 
         This tool records an answer proposal for evaluation; it does not grade it.
         """
+        _ = runtime_context
+        answer = str(args.get("answer", ""))
+        raw_subtask_index = args.get("subtask_index")
+        subtask_index = int(raw_subtask_index) if raw_subtask_index is not None else None
         return {
             "status": "success",
             "type": "answer_submission",
-            "answer": str(answer),
-            "subtask_index": int(subtask_index) if subtask_index is not None else None,
+            "answer": answer,
+            "subtask_index": subtask_index,
         }
 
 

@@ -27,6 +27,14 @@ History 归属于 `AgentModule`（`self.history`），未设置时使用 Engine 
 
 Engine 会把当前轮 user/assistant 消息写入 history。
 
+现在 Engine 也会默认向 history 传入 token-aware 查询提示：
+
+- `pending_content`
+- `model_name`
+- `step_id`
+- `max_tokens`（扣除 system / 当前 user 输入保留后的有效 history budget）
+- `warning_ratio`
+
 典型 history 序列：
 
 - `system`
@@ -60,12 +68,13 @@ agent.run(
 
 当你希望框架自动压缩面向模型的上下文，而不是只靠简单滑动窗口时，可以使用 `CompactHistory`。
 
-`CompactHistory` 是显式 opt-in 的预设，包含：
+`CompactHistory` 现在也是未自定义 history 的 LLM agent 的默认运行时 history，包含：
 
 - 接近预算时的 compact warning 元数据
 - 对旧长消息 / tool-heavy 内容的 microcompact
 - 对更早轮次的 continuation summary compact
-- 通过 Engine 正常事件写入 trace/qita 的 compact 事件
+- 通过规范化的 `context_history` 事件写入 trace/qita
+- 对 summary / compacted 消息的逐条 metadata
 
 典型用法：
 

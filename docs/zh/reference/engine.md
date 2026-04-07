@@ -9,6 +9,8 @@
 - action 执行
 - budget 与 stop 判定
 - hooks/events/trace
+- 面向 LLM 的默认上下文长度 telemetry
+- 默认的上下文 compact 协调
 
 ## 运行链路
 
@@ -34,10 +36,34 @@
 
 - `env`
 - `history_policy`
+- `context_config`
 - `search`
 - `critics`
 - `hooks`
 - `trace_writer`
+
+## Context Management
+
+对带 LLM 的 agent，Engine 现在默认记录每次请求的上下文指标：
+
+- `input_tokens_total`
+- `output_tokens`
+- `history_tokens`
+- `prepared_tokens`
+- `occupancy_ratio`
+- 运行累计 token totals
+
+QiTOS 还会先根据常见模型 id 自动推断更准确的 `context_window`，
+只有在无法识别时才回退到通用默认值。如果你明确知道某个模型的
+上下文上限不同，仍然可以在模型适配器里显式覆盖。
+
+当 history 触发 compact 或 warning 时，这些信息会进入：
+
+- runtime events
+- `records[*].context`
+- trace manifest summary
+- terminal UI
+- qita board / view / replay
 
 对大多数用户来说，更推荐直接走：
 

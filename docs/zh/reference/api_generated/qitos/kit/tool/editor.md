@@ -12,8 +12,8 @@
 ## Classes
 
 <a id="class-editortoolset"></a>
-???+ note "Class: `EditorToolSet(self, workspace_root: str = '.')`"
-    Bundle high-signal file editing tools for coding and document agents.
+???+ note "Class: `EditorToolSet(self, workspace_root: 'str' = '.')`"
+    Deprecated adapter for the legacy editor toolset API.
 
 ## Functions
 

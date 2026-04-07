@@ -7,11 +7,12 @@ from typing import Any, Dict, Generic, List, Optional, TypeVar
 
 from ..core.decision import Decision
 from ..core.env import Env, EnvObservation, EnvSpec, EnvStepResult
+from ..core.state import StateSchema
 from ..core.task import Task
 from .states import RuntimePhase
 
 
-StateT = TypeVar("StateT")
+StateT = TypeVar("StateT", bound=StateSchema)
 ObservationT = TypeVar("ObservationT")
 ActionT = TypeVar("ActionT")
 

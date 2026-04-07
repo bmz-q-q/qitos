@@ -40,6 +40,7 @@ board 页面能做：
 
 1. 检索与筛选 run
 2. 查看 run 级统计与状态
+3. 查看 token / peak-context 等 manifest 级指标
 3. 一键进入 `view` / `replay`
 4. 一键导出 raw / html
 
@@ -55,8 +56,9 @@ http://127.0.0.1:8765/run/<run_id>
 
 1. `Traj` 标签看 step 卡片化轨迹
 2. `Manifest` 标签看运行元数据
-3. 看 phase 时间线、事件详情
-4. 用字体放大/折叠提高可读性
+3. 同时看 phase 时间线和独立的 context 时间线
+4. 观察 peak occupancy、每步 context 使用量与 compact 标记
+5. 用字体放大/折叠提高可读性
 
 ## 3）在浏览器里回放（replay）
 
@@ -73,6 +75,8 @@ qita replay --run runs/<run_id>
 ```
 
 适合定位“先后顺序”相关问题，比如先报错还是先进入 stop。
+
+如果运行过程中触发了 compact / warning，replay 也会把这些节点作为一级内容展示出来。
 
 ## 4）导出运行结果
 

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field as dc_field
 import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -15,7 +15,7 @@ class TaskValidationIssue:
     code: str
     message: str
     field: str
-    details: Dict[str, Any] = field(default_factory=dict)
+    details: Dict[str, Any] = dc_field(default_factory=dict)
 
 
 @dataclass
@@ -25,7 +25,7 @@ class TaskResourceBinding:
     target: Optional[str] = None
     exists: bool = False
     required: bool = True
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: Dict[str, Any] = dc_field(default_factory=dict)
 
 
 @dataclass
@@ -41,10 +41,10 @@ class TaskResult:
     success: bool
     stop_reason: Optional[str]
     final_result: Any
-    criteria: List[TaskCriterionResult] = field(default_factory=list)
-    artifacts: List[TaskResourceBinding] = field(default_factory=list)
-    metrics: Dict[str, Any] = field(default_factory=dict)
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    criteria: List[TaskCriterionResult] = dc_field(default_factory=list)
+    artifacts: List[TaskResourceBinding] = dc_field(default_factory=list)
+    metrics: Dict[str, Any] = dc_field(default_factory=dict)
+    metadata: Dict[str, Any] = dc_field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -60,7 +60,7 @@ class TaskResource:
     mount_to: Optional[str] = None
     required: bool = True
     description: str = ""
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: Dict[str, Any] = dc_field(default_factory=dict)
 
 
 @dataclass
@@ -78,13 +78,13 @@ class Task:
 
     id: str
     objective: str
-    inputs: Dict[str, Any] = field(default_factory=dict)
-    resources: List[TaskResource] = field(default_factory=list)
+    inputs: Dict[str, Any] = dc_field(default_factory=dict)
+    resources: List[TaskResource] = dc_field(default_factory=list)
     env_spec: Optional[EnvSpec] = None
-    constraints: Dict[str, Any] = field(default_factory=dict)
-    success_criteria: List[str] = field(default_factory=list)
-    budget: TaskBudget = field(default_factory=TaskBudget)
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    constraints: Dict[str, Any] = dc_field(default_factory=dict)
+    success_criteria: List[str] = dc_field(default_factory=list)
+    budget: TaskBudget = dc_field(default_factory=TaskBudget)
+    metadata: Dict[str, Any] = dc_field(default_factory=dict)
 
     def resolve_resources(self, workspace: Optional[str] = None) -> List[TaskResourceBinding]:
         root = Path(workspace).resolve() if workspace else None
@@ -292,6 +292,7 @@ def _is_writable(path: Path) -> bool:
         return os.access(path, os.W_OK)
     except Exception:
         return False
+
 
 __all__ = [
     "Task",

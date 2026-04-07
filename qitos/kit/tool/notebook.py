@@ -8,11 +8,11 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from qitos.core.tool import BaseTool, ToolPermission, ToolSpec
-from qitos.kit.tool.codebase import _resolve_workspace_path
+from qitos.kit.tool._workspace import resolve_workspace_path
 
 
 def _load_notebook(root_dir: str, path: str) -> tuple[Path, Dict[str, Any]]:
-    resolved = Path(_resolve_workspace_path(root_dir, path))
+    resolved = Path(resolve_workspace_path(root_dir, path))
     with resolved.open("r", encoding="utf-8") as f:
         data = json.load(f)
     if not isinstance(data, dict) or "cells" not in data or not isinstance(data["cells"], list):
@@ -55,13 +55,7 @@ class ReadNotebook(BaseTool):
             )
         )
 
-    def run(
-        self,
-        path: str,
-        cell_start: int = 0,
-        cell_limit: int = 20,
-        runtime_context: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+    def execute(self, args: Dict[str, Any], runtime_context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         Read a window of cells from a notebook file.
 
@@ -73,6 +67,9 @@ class ReadNotebook(BaseTool):
         Returns simplified cell records with index, type, and source text.
         """
         _ = runtime_context
+        path = str(args.get("path", ""))
+        cell_start = int(args.get("cell_start", 0))
+        cell_limit = int(args.get("cell_limit", 20))
         try:
             resolved, data = _load_notebook(self._root_dir, path)
             cells = data.get("cells", [])
@@ -124,13 +121,7 @@ class ReplaceNotebookCell(BaseTool):
             )
         )
 
-    def run(
-        self,
-        path: str,
-        cell_index: int,
-        source: str,
-        runtime_context: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+    def execute(self, args: Dict[str, Any], runtime_context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         Replace the source text of one notebook cell.
 
@@ -142,6 +133,9 @@ class ReplaceNotebookCell(BaseTool):
         Preserves the notebook structure and only rewrites the selected cell.
         """
         _ = runtime_context
+        path = str(args.get("path", ""))
+        cell_index = int(args.get("cell_index", 0))
+        source = str(args.get("source", ""))
         try:
             resolved, data = _load_notebook(self._root_dir, path)
             cells = data["cells"]
@@ -184,14 +178,7 @@ class InsertNotebookCell(BaseTool):
             )
         )
 
-    def run(
-        self,
-        path: str,
-        cell_type: str,
-        source: str,
-        index: int = -1,
-        runtime_context: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+    def execute(self, args: Dict[str, Any], runtime_context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         Insert a new notebook cell into a `.ipynb` file.
 
@@ -205,6 +192,10 @@ class InsertNotebookCell(BaseTool):
         position.
         """
         _ = runtime_context
+        path = str(args.get("path", ""))
+        cell_type = str(args.get("cell_type", ""))
+        source = str(args.get("source", ""))
+        index = int(args.get("index", -1))
         normalized_type = str(cell_type or "").strip().lower()
         if normalized_type not in {"code", "markdown", "raw"}:
             return {"status": "error", "message": f"Unsupported cell_type: {normalized_type}"}

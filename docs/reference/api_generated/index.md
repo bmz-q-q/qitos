@@ -119,6 +119,7 @@ This section is generated automatically at build time from the `qitos` package.
 
 - [`qitos.engine`](qitos/engine.md)
 - [`qitos.engine._action_runtime`](qitos/engine/_action_runtime.md)
+- [`qitos.engine._context_runtime`](qitos/engine/_context_runtime.md)
 - [`qitos.engine._control_runtime`](qitos/engine/_control_runtime.md)
 - [`qitos.engine._env_runtime`](qitos/engine/_env_runtime.md)
 - [`qitos.engine._model_runtime`](qitos/engine/_model_runtime.md)
@@ -201,16 +202,32 @@ This section is generated automatically at build time from the `qitos` package.
 - [`qitos.kit.state`](qitos/kit/state.md)
 - [`qitos.kit.state.plan`](qitos/kit/state/plan.md)
 - [`qitos.kit.tool`](qitos/kit/tool.md)
+- [`qitos.kit.tool._coding_utils`](qitos/kit/tool/_coding_utils.md)
+- [`qitos.kit.tool._workspace`](qitos/kit/tool/_workspace.md)
+- [`qitos.kit.tool.advanced`](qitos/kit/tool/advanced.md)
 - [`qitos.kit.tool.codebase`](qitos/kit/tool/codebase.md)
 - [`qitos.kit.tool.coding`](qitos/kit/tool/coding.md)
 - [`qitos.kit.tool.cybench`](qitos/kit/tool/cybench.md)
 - [`qitos.kit.tool.editor`](qitos/kit/tool/editor.md)
 - [`qitos.kit.tool.epub`](qitos/kit/tool/epub.md)
+- [`qitos.kit.tool.experimental`](qitos/kit/tool/experimental.md)
+- [`qitos.kit.tool.experimental.security_research`](qitos/kit/tool/experimental/security_research.md)
+- [`qitos.kit.tool.experimental.security_research.exploit_toolset`](qitos/kit/tool/experimental/security_research/exploit_toolset.md)
+- [`qitos.kit.tool.experimental.security_research.password_toolset`](qitos/kit/tool/experimental/security_research/password_toolset.md)
+- [`qitos.kit.tool.experimental.security_research.recon_toolset`](qitos/kit/tool/experimental/security_research/recon_toolset.md)
+- [`qitos.kit.tool.experimental.security_research.security_audit`](qitos/kit/tool/experimental/security_research/security_audit.md)
+- [`qitos.kit.tool.experimental.security_research.vuln_scan_toolset`](qitos/kit/tool/experimental/security_research/vuln_scan_toolset.md)
+- [`qitos.kit.tool.exploit_toolset`](qitos/kit/tool/exploit_toolset.md)
 - [`qitos.kit.tool.file`](qitos/kit/tool/file.md)
 - [`qitos.kit.tool.library`](qitos/kit/tool/library.md)
 - [`qitos.kit.tool.library.base`](qitos/kit/tool/library/base.md)
 - [`qitos.kit.tool.library.store`](qitos/kit/tool/library/store.md)
+- [`qitos.kit.tool.network_toolset`](qitos/kit/tool/network_toolset.md)
 - [`qitos.kit.tool.notebook`](qitos/kit/tool/notebook.md)
+- [`qitos.kit.tool.password_toolset`](qitos/kit/tool/password_toolset.md)
+- [`qitos.kit.tool.recon_toolset`](qitos/kit/tool/recon_toolset.md)
+- [`qitos.kit.tool.report_toolset`](qitos/kit/tool/report_toolset.md)
+- [`qitos.kit.tool.security_audit`](qitos/kit/tool/security_audit.md)
 - [`qitos.kit.tool.shell`](qitos/kit/tool/shell.md)
 - [`qitos.kit.tool.skill_tools`](qitos/kit/tool/skill_tools.md)
 - [`qitos.kit.tool.taskboard`](qitos/kit/tool/taskboard.md)
@@ -219,7 +236,9 @@ This section is generated automatically at build time from the `qitos` package.
 - [`qitos.kit.tool.thinking`](qitos/kit/tool/thinking.md)
 - [`qitos.kit.tool.tools`](qitos/kit/tool/tools.md)
 - [`qitos.kit.tool.toolset`](qitos/kit/tool/toolset.md)
+- [`qitos.kit.tool.vuln_scan_toolset`](qitos/kit/tool/vuln_scan_toolset.md)
 - [`qitos.kit.tool.web`](qitos/kit/tool/web.md)
+- [`qitos.kit.tool.web_test_toolset`](qitos/kit/tool/web_test_toolset.md)
 
 <a id="group-qitos-metric"></a>
 ### `qitos.metric`
@@ -231,7 +250,11 @@ This section is generated automatically at build time from the `qitos` package.
 ### `qitos.models`
 
 - [`qitos.models`](qitos/models.md)
+- [`qitos.models.anthropic`](qitos/models/anthropic.md)
 - [`qitos.models.base`](qitos/models/base.md)
+- [`qitos.models.context_registry`](qitos/models/context_registry.md)
+- [`qitos.models.gemini`](qitos/models/gemini.md)
+- [`qitos.models.litellm`](qitos/models/litellm.md)
 - [`qitos.models.local`](qitos/models/local.md)
 - [`qitos.models.openai`](qitos/models/openai.md)
 
@@ -239,16 +262,23 @@ This section is generated automatically at build time from the `qitos` package.
 ### `qitos.qita`
 
 - [`qitos.qita`](qitos/qita.md)
+- [`qitos.qita._cli_app`](qitos/qita/_cli_app.md)
 - [`qitos.qita.cli`](qitos/qita/cli.md)
+- [`qitos.qita.data`](qitos/qita/data.md)
+- [`qitos.qita.server`](qitos/qita/server.md)
+- [`qitos.qita.views`](qitos/qita/views.md)
 
 <a id="group-qitos-render"></a>
 ### `qitos.render`
 
 - [`qitos.render`](qitos/render.md)
+- [`qitos.render._hooks_impl`](qitos/render/_hooks_impl.md)
 - [`qitos.render.cli_render`](qitos/render/cli_render.md)
 - [`qitos.render.content_renderer`](qitos/render/content_renderer.md)
 - [`qitos.render.events`](qitos/render/events.md)
 - [`qitos.render.hooks`](qitos/render/hooks.md)
+- [`qitos.render.terminal`](qitos/render/terminal.md)
+- [`qitos.render.themes`](qitos/render/themes.md)
 
 <a id="group-qitos-trace"></a>
 ### `qitos.trace`

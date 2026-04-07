@@ -18,6 +18,14 @@ Optional extras:
 pip install "qitos[models,benchmarks]"
 ```
 
+`qitos[models]` currently bundles optional SDK dependencies for:
+
+- OpenAI-compatible providers via `openai`
+- LiteLLM via `litellm`
+
+Anthropic native Messages API, Google Gemini native API, Ollama, and LM Studio
+adapters are available in `qitos.models` without extra provider SDKs.
+
 ## For Contributors
 
 Clone the repository and install in editable mode:

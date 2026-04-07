@@ -56,10 +56,19 @@ class ToolRegistry:
         return self
 
     def include(self, obj: Any) -> "ToolRegistry":
+        if hasattr(obj, "tools") and callable(getattr(obj, "tools")):
+            if obj not in self._toolsets:
+                self._toolsets.append(obj)
+            for item in obj.tools():
+                self.register(item)
+            return self
         for attr_name in dir(obj):
             if attr_name.startswith("_"):
                 continue
             attr = getattr(obj, attr_name)
+            if isinstance(attr, BaseTool):
+                self.register(attr)
+                continue
             if not callable(attr):
                 continue
 
@@ -90,6 +99,14 @@ class ToolRegistry:
             "name": tool.name,
             "description": tool.spec.description,
             "required_ops": list(tool.spec.required_ops),
+            "input_schema": dict(tool.spec.input_schema or {}),
+            "output_schema": dict(tool.spec.output_schema or {}),
+            "read_only": bool(tool.spec.read_only),
+            "concurrency_safe": bool(tool.spec.concurrency_safe),
+            "requires_user_interaction": bool(tool.spec.requires_user_interaction),
+            "supports_background": bool(tool.spec.supports_background),
+            "result_max_chars": tool.spec.result_max_chars,
+            "produces_artifact": bool(tool.spec.produces_artifact),
             "origin": {
                 "source": origin.source,
                 "toolset_name": origin.toolset_name,
@@ -149,11 +166,13 @@ class ToolRegistry:
                     "function": {
                         "name": tool.spec.name,
                         "description": tool.spec.description,
-                        "parameters": {
+                        "parameters": tool.spec.input_schema
+                        or {
                             "type": "object",
                             "properties": tool.spec.parameters,
                             "required": tool.spec.required,
                         },
+                        "output_schema": tool.spec.output_schema,
                     },
                     "origin": {
                         "source": origin.source,
@@ -167,6 +186,14 @@ class ToolRegistry:
                         "command": tool.spec.permissions.command,
                     },
                     "required_ops": list(tool.spec.required_ops),
+                    "capabilities": {
+                        "read_only": bool(tool.spec.read_only),
+                        "concurrency_safe": bool(tool.spec.concurrency_safe),
+                        "requires_user_interaction": bool(tool.spec.requires_user_interaction),
+                        "supports_background": bool(tool.spec.supports_background),
+                        "result_max_chars": tool.spec.result_max_chars,
+                        "produces_artifact": bool(tool.spec.produces_artifact),
+                    },
                 }
             )
         return specs

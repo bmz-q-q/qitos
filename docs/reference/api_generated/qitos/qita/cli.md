@@ -7,7 +7,6 @@
 
 - [Classes](#classes)
 - [Functions](#functions)
-- [Function: `main`](#function-main)
 
 ## Classes
 
@@ -15,9 +14,7 @@
 
 ## Functions
 
-<a id="function-main"></a>
-???+ note "Function: `main(argv: 'Optional[List[str]]' = None) -> 'int'`"
-    _No summary available._
+- _None_
 
 ## Source Index
 

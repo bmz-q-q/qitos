@@ -32,14 +32,7 @@ class SendTerminalKeys(BaseTool):
             )
         )
 
-    def run(
-        self,
-        keystrokes: str,
-        duration_sec: float = 1.0,
-        block: bool = False,
-        max_timeout_sec: float = 180.0,
-        runtime_context: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+    def execute(self, args: Dict[str, Any], runtime_context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         Send raw keystrokes to the active interactive terminal session.
 
@@ -53,6 +46,10 @@ class SendTerminalKeys(BaseTool):
         responsible for producing the next terminal observation.
         """
         runtime_context = runtime_context or {}
+        keystrokes = str(args.get("keystrokes", ""))
+        duration_sec = float(args.get("duration_sec", 1.0))
+        block = bool(args.get("block", False))
+        max_timeout_sec = float(args.get("max_timeout_sec", 180.0))
         ops = runtime_context.get("ops", {})
         terminal_ops = ops.get("terminal")
         if terminal_ops is None or not hasattr(terminal_ops, "send_keys"):

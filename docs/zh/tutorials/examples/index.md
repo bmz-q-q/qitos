@@ -22,10 +22,12 @@
 ## 额外的 preset 示例
 
 - Compact-enabled ReAct agent：`examples/real/react_compact_agent.py`
+- Code security audit agent：`examples/real/code_security_audit_agent.py`
 
 ## Source Index
 
 - [docs/tutorials/examples/index.md](https://github.com/Qitor/qitos/blob/main/docs/tutorials/examples/index.md)
 - [docs/tutorials/examples/react.md](https://github.com/Qitor/qitos/blob/main/docs/tutorials/examples/react.md)
 - [docs/tutorials/examples/planact.md](https://github.com/Qitor/qitos/blob/main/docs/tutorials/examples/planact.md)
+- [examples/real/code_security_audit_agent.py](https://github.com/Qitor/qitos/blob/main/examples/real/code_security_audit_agent.py)
 - [examples/real/react_compact_agent.py](https://github.com/Qitor/qitos/blob/main/examples/real/react_compact_agent.py)

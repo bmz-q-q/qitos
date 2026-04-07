@@ -8,14 +8,15 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Dict, Generic, Optional, TypeVar
 
-from ..core.errors import ErrorCategory, StopReason
+from ..core.errors import StopReason
+from ..core.state import StateSchema
 from ..core.task import Task, TaskCriterionResult, TaskResult, TaskValidationIssue
 from ..trace import runtime_event_to_trace, runtime_step_to_trace
 from .hooks import HookContext
 from .states import RuntimeEvent, RuntimePhase, StepRecord
 
 
-StateT = TypeVar("StateT")
+StateT = TypeVar("StateT", bound=StateSchema)
 
 
 class _TraceRuntime(Generic[StateT]):
@@ -163,6 +164,7 @@ class _TraceRuntime(Generic[StateT]):
             "tool_count": len(tools),
             "tools": tools,
             "env": env_info,
+            "context": engine._context_runtime.run_meta(llm),
         }
 
     def build_task_result(self, state: StateT, task_obj: Optional[Task], started_at: float) -> TaskResult:
@@ -196,7 +198,10 @@ class _TraceRuntime(Generic[StateT]):
             metrics={
                 "steps": len(self.engine.records),
                 "elapsed_seconds": elapsed_seconds,
-                "token_usage": self.engine._token_usage,
+                "token_usage": self.engine._context_runtime.tokens_total,
+                "prompt_tokens_total": self.engine._context_runtime.prompt_tokens_total,
+                "completion_tokens_total": self.engine._context_runtime.completion_tokens_total,
+                "peak_context_occupancy_ratio": self.engine._context_runtime.peak_occupancy_ratio,
             },
             metadata={"task_meta": self.task_meta(task_obj), "run_meta": self.run_meta()},
         )

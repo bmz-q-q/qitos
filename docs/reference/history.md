@@ -27,6 +27,14 @@ In default model path (`decide -> None`), Engine assembles messages as:
 
 Engine appends current user/assistant turns into history.
 
+Engine now also passes token-aware query hints into history by default:
+
+- `pending_content`
+- `model_name`
+- `step_id`
+- `max_tokens` (effective history budget after system/user reserve)
+- `warning_ratio`
+
 Typical history stream:
 
 - `system`
@@ -60,12 +68,13 @@ agent.run(
 
 Use `CompactHistory` when you want the framework to compact model-facing context automatically instead of relying on a raw sliding window.
 
-`CompactHistory` is opt-in and adds:
+`CompactHistory` is also the default runtime history for LLM agents that do not provide a custom history. It adds:
 
 - threshold warning metadata before the history exceeds the budget
 - microcompact for older long messages and tool-heavy blobs
 - continuation summary compaction for earlier rounds
-- compact runtime events in trace/qita via normal Engine events
+- canonical `context_history` runtime events in trace/qita
+- per-message metadata for summary / compacted history slices
 
 Typical usage:
 

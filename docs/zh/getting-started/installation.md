@@ -18,6 +18,14 @@ pip install qitos
 pip install "qitos[models,benchmarks]"
 ```
 
+`qitos[models]` 目前会安装这些可选模型依赖：
+
+- 通过 `openai` 接 OpenAI-compatible provider
+- 通过 `litellm` 接 LiteLLM
+
+Anthropic 原生 Messages API、Google Gemini 原生 API、Ollama、LM Studio
+适配器都直接在 `qitos.models` 中可用，不额外依赖 provider SDK。
+
 ## 贡献者安装
 
 克隆仓库并以 editable 模式安装：

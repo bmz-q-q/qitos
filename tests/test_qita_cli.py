@@ -25,7 +25,17 @@ def _make_run(root: Path, run_id: str) -> Path:
                 "updated_at": "2026-01-01T00:00:00+00:00",
                 "step_count": 1,
                 "event_count": 1,
-                "summary": {"stop_reason": "final", "final_result": "ok", "steps": 1, "failure_report": {}},
+                "summary": {
+                    "stop_reason": "final",
+                    "final_result": "ok",
+                    "steps": 1,
+                    "failure_report": {},
+                    "context": {
+                        "tokens_total": 144,
+                        "peak_occupancy_ratio": 0.74,
+                        "compact_counts": {"warning": 1, "microcompact_applied": 1},
+                    },
+                },
                 "schema_version": "v1",
                 "model_id": "x",
                 "prompt_hash": "y",
@@ -37,7 +47,10 @@ def _make_run(root: Path, run_id: str) -> Path:
         encoding="utf-8",
     )
     (run / "events.jsonl").write_text('{"step_id":0,"phase":"INIT","ok":true,"ts":"x"}\n', encoding="utf-8")
-    (run / "steps.jsonl").write_text('{"step_id":0,"observation":{},"decision":{},"actions":[],"action_results":[],"tool_invocations":[],"critic_outputs":[],"state_diff":{}}\n', encoding="utf-8")
+    (run / "steps.jsonl").write_text(
+        '{"step_id":0,"observation":{},"decision":{},"actions":[],"action_results":[],"tool_invocations":[],"critic_outputs":[],"state_diff":{},"context":{"context_window":8192,"input_tokens_total":3200,"history_tokens":1800,"output_tokens":240,"occupancy_ratio":0.74,"compact_events":[{"stage":"warning","before_tokens":3200,"after_tokens":3200,"saved_tokens":0},{"stage":"microcompact_applied","before_tokens":3200,"after_tokens":2400,"saved_tokens":800}]}}\n',
+        encoding="utf-8",
+    )
     return run
 
 
@@ -72,6 +85,9 @@ def test_render_pages(tmp_path: Path):
     assert "qita board" in board
     assert "export raw" in view
     assert "QitOS Replay" in replay
+    assert "context timeline" in view
+    assert "Context occupancy timeline" in view
+    assert "compact markers" in view
     marker = '<script id="payload" type="application/json">'
     start = view.index(marker) + len(marker)
     end = view.index("</script>", start)

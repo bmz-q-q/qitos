@@ -89,6 +89,7 @@ nav:
           - History: reference/history.md
           - Memory: reference/memory.md
           - Hooks & Trace: reference/trace_and_hooks.md
+          - Security Audit Tools: reference/security_audit_tools.md
           - Evaluate & Metric: reference/evaluate_metric.md
           - StopReason: reference/stop_reason.md
           - qita CLI: reference/qita_cli.md
@@ -143,6 +144,7 @@ nav:
           - History: zh/reference/history.md
           - Memory: zh/reference/memory.md
           - Hooks 与 Trace: zh/reference/trace_and_hooks.md
+          - Security Audit Tools: zh/reference/security_audit_tools.md
           - Evaluate 与 Metric: zh/reference/evaluate_metric.md
           - StopReason: zh/reference/stop_reason.md
           - qita 命令行: zh/reference/qita_cli.md

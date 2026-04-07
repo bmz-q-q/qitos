@@ -160,6 +160,7 @@ references/
 examples/data/
 data/
 runs/
+playground/
 examples/runs/
 qitos_gaia_workspace/
 examples/qitos_gaia_workspace/

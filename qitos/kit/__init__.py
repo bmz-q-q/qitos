@@ -12,6 +12,7 @@ from .prompts import (
     PLAN_DRAFT_PROMPT,
     PLAN_EXEC_SYSTEM_PROMPT,
     REACT_SYSTEM_PROMPT,
+    SECURITY_AUDIT_SYSTEM_PROMPT,
     SWE_AGENT_SYSTEM_PROMPT,
     TERMINUS_JSON_SYSTEM_PROMPT,
     TERMINUS_TIMEOUT_PROMPT,
@@ -31,6 +32,7 @@ from .tool import (
     SendTerminalKeys,
     TaskToolSet,
     WriteFile,
+    coding_tools,
 )
 
 __all__ = [
@@ -56,6 +58,7 @@ __all__ = [
     "XML_DECISION_SYSTEM_PROMPT",
     "JSON_DECISION_SYSTEM_PROMPT",
     "SWE_AGENT_SYSTEM_PROMPT",
+    "SECURITY_AUDIT_SYSTEM_PROMPT",
     "TERMINUS_JSON_SYSTEM_PROMPT",
     "TERMINUS_XML_SYSTEM_PROMPT",
     "TERMINUS_TIMEOUT_PROMPT",
@@ -71,6 +74,7 @@ __all__ = [
     "WriteFile",
     "EpubToolSet",
     "TaskToolSet",
+    "coding_tools",
     "MarkdownFileMemory",
     "WindowMemory",
     "WindowHistory",

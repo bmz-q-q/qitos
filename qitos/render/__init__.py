@@ -26,13 +26,16 @@ from .cli_render import (
 from .hooks import (
     RenderHook,
     RenderStreamHook,
+    ClaudeStyleHook,
+)
+from .terminal import (
     RichConsoleHook,
     SimpleRichConsoleHook,
     VerboseRichConsoleHook,
-    ClaudeStyleHook,
 )
 from .events import RenderEvent
 from .content_renderer import ContentFirstRenderer
+from .themes import CLAUDE_THEME_PRESETS
 
 __all__ = [
     # Rendering
@@ -52,6 +55,7 @@ __all__ = [
     "SimpleRichConsoleHook",
     "VerboseRichConsoleHook",
     "ClaudeStyleHook",
+    "CLAUDE_THEME_PRESETS",
     "RenderEvent",
     "ContentFirstRenderer",
 ]

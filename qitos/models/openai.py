@@ -7,8 +7,7 @@ Supports environment variable configuration: OPENAI_API_KEY, OPENAI_BASE_URL
 
 import os
 import json
-from typing import Any, Dict, List, Optional
-from urllib.parse import urljoin
+from typing import Any, Dict, List, Optional, cast
 
 from .base import Model
 
@@ -40,7 +39,8 @@ class OpenAIModel(Model):
         system_prompt: Optional[str] = None,
         temperature: float = 0.7,
         max_tokens: int = 2048,
-        timeout: int = 60
+        timeout: int = 60,
+        context_window: Optional[int] = None,
     ):
         """
         Initialize OpenAI model
@@ -53,12 +53,14 @@ class OpenAIModel(Model):
             temperature: Temperature parameter (0.0-1.0)
             max_tokens: Maximum output token count
             timeout: Request timeout (seconds)
+            context_window: Total model context window
         """
         super().__init__(
             model=model,
             system_prompt=system_prompt,
             temperature=temperature,
-            max_tokens=max_tokens
+            max_tokens=max_tokens,
+            context_window=context_window,
         )
         
         self.api_key = api_key or os.getenv("OPENAI_API_KEY")
@@ -91,10 +93,11 @@ class OpenAIModel(Model):
             
             response = client.chat.completions.create(
                 model=self.model,
-                messages=messages,
+                messages=cast(Any, messages),
                 temperature=self.temperature,
                 max_tokens=self.max_tokens
             )
+            self._set_last_usage(self._usage_from_response(response))
             
             return self._parse_response(response)
             
@@ -125,6 +128,25 @@ class OpenAIModel(Model):
             return message.content.strip()
         
         return ""
+
+    def _usage_from_response(self, response: Any) -> Optional[Dict[str, Any]]:
+        usage = getattr(response, "usage", None)
+        if usage is None:
+            return None
+        prompt_tokens = getattr(usage, "prompt_tokens", None)
+        completion_tokens = getattr(usage, "completion_tokens", None)
+        total_tokens = getattr(usage, "total_tokens", None)
+        if prompt_tokens is None and isinstance(usage, dict):
+            prompt_tokens = usage.get("prompt_tokens")
+            completion_tokens = usage.get("completion_tokens")
+            total_tokens = usage.get("total_tokens")
+        if prompt_tokens is None and completion_tokens is None and total_tokens is None:
+            return None
+        return {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": total_tokens,
+        }
     
     def _format_tool_calls(self, tool_calls) -> str:
         """
@@ -190,7 +212,8 @@ class OpenAICompatibleModel(Model):
         system_prompt: Optional[str] = None,
         temperature: float = 0.7,
         max_tokens: int = 2048,
-        timeout: int = 60
+        timeout: int = 60,
+        context_window: Optional[int] = None,
     ):
         """
         Initialize compatible model
@@ -203,12 +226,14 @@ class OpenAICompatibleModel(Model):
             temperature: Temperature parameter
             max_tokens: Maximum output token count
             timeout: Request timeout
+            context_window: Total model context window
         """
         super().__init__(
             model=model,
             system_prompt=system_prompt,
             temperature=temperature,
-            max_tokens=max_tokens
+            max_tokens=max_tokens,
+            context_window=context_window,
         )
         
         self.api_key = api_key or os.getenv("OPENAI_API_KEY") or "dummy-key"
@@ -241,10 +266,11 @@ class OpenAICompatibleModel(Model):
             
             response = client.chat.completions.create(
                 model=self.model,
-                messages=messages,
+                messages=cast(Any, messages),
                 temperature=self.temperature,
                 max_tokens=self.max_tokens
             )
+            self._set_last_usage(self._usage_from_response(response))
             
             return self._parse_response(response)
             
@@ -300,6 +326,25 @@ class OpenAICompatibleModel(Model):
         
         return "\n".join(parts)
 
+    def _usage_from_response(self, response: Any) -> Optional[Dict[str, Any]]:
+        usage = getattr(response, "usage", None)
+        if usage is None:
+            return None
+        prompt_tokens = getattr(usage, "prompt_tokens", None)
+        completion_tokens = getattr(usage, "completion_tokens", None)
+        total_tokens = getattr(usage, "total_tokens", None)
+        if prompt_tokens is None and isinstance(usage, dict):
+            prompt_tokens = usage.get("prompt_tokens")
+            completion_tokens = usage.get("completion_tokens")
+            total_tokens = usage.get("total_tokens")
+        if prompt_tokens is None and completion_tokens is None and total_tokens is None:
+            return None
+        return {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": total_tokens,
+        }
+
 
 class AzureOpenAIModel(OpenAICompatibleModel):
     """
@@ -329,7 +374,8 @@ class AzureOpenAIModel(OpenAICompatibleModel):
         system_prompt: Optional[str] = None,
         temperature: float = 0.7,
         max_tokens: int = 2048,
-        timeout: int = 60
+        timeout: int = 60,
+        context_window: Optional[int] = None,
     ):
         """
         Initialize Azure OpenAI model
@@ -343,6 +389,7 @@ class AzureOpenAIModel(OpenAICompatibleModel):
             temperature: Temperature parameter
             max_tokens: Maximum output token count
             timeout: Request timeout
+            context_window: Total model context window
         """
         api_key = api_key or os.getenv("AZURE_OPENAI_API_KEY")
         endpoint = endpoint or os.getenv("AZURE_OPENAI_ENDPOINT")
@@ -361,7 +408,8 @@ class AzureOpenAIModel(OpenAICompatibleModel):
             system_prompt=system_prompt,
             temperature=temperature,
             max_tokens=max_tokens,
-            timeout=timeout
+            timeout=timeout,
+            context_window=context_window,
         )
         
         self.api_version = api_version
@@ -384,10 +432,11 @@ class AzureOpenAIModel(OpenAICompatibleModel):
             
             response = client.chat.completions.create(
                 model=self.deployment or "",
-                messages=messages,
+                messages=cast(Any, messages),
                 temperature=self.temperature,
                 max_tokens=self.max_tokens
             )
+            self._set_last_usage(self._usage_from_response(response))
             
             return self._parse_response(response)
             

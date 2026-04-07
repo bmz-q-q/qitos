@@ -56,9 +56,9 @@ def test_compact_history_emits_microcompact_and_summary_events() -> None:
 
     assert retrieved
     assert retrieved[0].metadata.get("summary") is True
-    assert any(event.get("stage") == "compact_warning" for event in events)
-    assert any(event.get("stage") == "microcompact_applied" for event in events)
-    assert any(event.get("stage") == "summary_compact_applied" for event in events)
+    assert any(event.get("stage") == "context_history" and (event.get("context") or {}).get("stage") == "warning" for event in events)
+    assert any(event.get("stage") == "context_history" and (event.get("context") or {}).get("stage") == "microcompact_applied" for event in events)
+    assert any(event.get("stage") == "context_history" and (event.get("context") or {}).get("stage") == "summary_compact_applied" for event in events)
     assert metadata[0].get("summary") is True
     assert metadata[0].get("source") == "compact_history"
 
@@ -135,11 +135,11 @@ def test_engine_surfaces_compact_events_and_history_metadata() -> None:
     assert result.state.final_result == "42"
     assert len(calls) == 2
     compact_stages = [
-        event.payload.get("stage")
+        (event.payload.get("context") or {}).get("stage")
         for event in result.events
-        if getattr(event.phase, "value", event.phase) == "DECIDE"
+        if getattr(event.phase, "value", event.phase) == "DECIDE" and event.payload.get("stage") == "context_history"
     ]
-    assert "compact_warning" in compact_stages
+    assert "warning" in compact_stages
     assert any(stage in {"microcompact_applied", "summary_compact_applied"} for stage in compact_stages)
 
     model_input_events = [event for event in result.events if event.payload.get("stage") == "model_input"]
@@ -148,3 +148,5 @@ def test_engine_surfaces_compact_events_and_history_metadata() -> None:
     assert isinstance(history_meta, list)
     assert history_meta
     assert any(item.get("summary") or item.get("compacted") for item in history_meta)
+    context = model_input_events[-1].payload.get("context", {})
+    assert context.get("input_tokens_total", 0) > 0

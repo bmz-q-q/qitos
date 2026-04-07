@@ -15,15 +15,15 @@
 
 <a id="class-listfiles"></a>
 ???+ note "Class: `ListFiles(self, root_dir: 'str' = '.')`"
-    List files and directories under a workspace-relative path.
+    List files under one directory inside the workspace root.
 
 <a id="class-readfile"></a>
 ???+ note "Class: `ReadFile(self, root_dir: 'str' = '.')`"
-    Read the full UTF-8 text content of a workspace file.
+    Read text content from a file under the workspace root.
 
 <a id="class-writefile"></a>
 ???+ note "Class: `WriteFile(self, root_dir: 'str' = '.')`"
-    Write UTF-8 text to a workspace file, creating parent directories when needed.
+    Write text content to a file under the workspace root.
 
 ## Functions
 

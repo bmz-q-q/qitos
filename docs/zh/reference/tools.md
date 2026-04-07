@@ -160,6 +160,11 @@ flowchart TB
   - `InMemoryToolLibrary`、`ToolArtifact`、`BaseToolLibrary`
 - 注册表快捷构造：
   - `math_tools()`、`editor_tools(workspace_root)`
+  - `security_audit_tools(workspace_root, include_external=False)`
+- 代码安全审计预设：
+  - `SecurityAuditToolSet`
+  - `SECURITY_AUDIT_SYSTEM_PROMPT`
+  - 示例：`examples/real/code_security_audit_agent.py`
 
 导入示例：
 

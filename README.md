@@ -12,7 +12,7 @@ Research-first agent framework for building reproducible LLM agents.
 
 QitOS gives you a clean `AgentModule + Engine` kernel, benchmark-ready workflows, and built-in run observability with `qita`.
 
-[Get Started](https://qitor.github.io/qitos/start-here/) · [10-Minute Tutorial](https://qitor.github.io/qitos/getting-started/build_agent_in_10_minutes/) · [Examples](https://qitor.github.io/qitos/tutorials/examples/) · [Chinese README](README.zh.md)
+[Get Started](https://qitor.github.io/qitos/start-here/) · [10-Minute Tutorial](https://qitor.github.io/qitos/getting-started/build_agent_in_10_minutes/) · [Examples](https://qitor.github.io/qitos/tutorials/examples/) · [Changelog](CHANGELOG.md) · [Chinese README](README.zh.md)
 
 ## Who QitOS Is For
 
@@ -158,6 +158,7 @@ QitOS is currently **Alpha**.
 - Stable direction: `AgentModule + Engine`, trace/qita flow, canonical examples, benchmark adapters.
 - Likely to evolve: higher-level convenience APIs, some `kit` modules, and experimental toolsets.
 - If you are evaluating adoption, start from the kernel and examples, not assumptions about frozen surface area.
+- For ongoing project evolution and upgrade notes, see [CHANGELOG.md](CHANGELOG.md).
 
 ## Installation And Versions
 

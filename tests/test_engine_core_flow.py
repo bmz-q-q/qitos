@@ -330,3 +330,81 @@ def test_memory_and_history_streams_are_strictly_separated():
     hist_roles = [m.role for m in hist.messages]
     assert "user" in hist_roles
     assert "assistant" in hist_roles
+
+
+def test_engine_records_context_telemetry_and_defaults_to_compact_runtime_history():
+    class _DummyModel:
+        model = "dummy-context"
+        max_tokens = 128
+        context_window = 4096
+
+        def __call__(self, messages):
+            return "Final Answer: ok"
+
+    class _Agent(DemoAgent):
+        def __init__(self):
+            super().__init__()
+            self.llm = _DummyModel()
+            self.model_parser = ReActTextParser()
+
+        def build_system_prompt(self, state: DemoState) -> str | None:
+            return "System prompt"
+
+        def prepare(self, state: DemoState) -> str:
+            return f"Task={state.task}\n" + ("verbose context " * 20)
+
+        def decide(self, state: DemoState, observation: dict[str, Any]):
+            return None
+
+    engine = Engine(agent=_Agent(), budget=RuntimeBudget(max_steps=2))
+    result = engine.run("demo")
+    assert result.state.final_result == "ok"
+    assert engine._runtime_history.__class__.__name__ == "CompactHistory"
+    assert result.records
+    assert result.records[0].context.get("input_tokens_total", 0) > 0
+    assert result.records[0].context.get("context_window") == 4096
+
+
+def test_engine_prefers_provider_usage_for_context_totals():
+    class _UsageModel:
+        model = "dummy-usage"
+        max_tokens = 128
+        context_window = 8192
+
+        def __init__(self):
+            self._used = False
+
+        def __call__(self, messages):
+            self._used = True
+            return "Final Answer: exact"
+
+        def count_tokens(self, payload):
+            return 10
+
+        def extract_usage(self):
+            if not self._used:
+                return None
+            return {"prompt_tokens": 123, "completion_tokens": 17, "total_tokens": 140}
+
+    class _Agent(DemoAgent):
+        def __init__(self):
+            super().__init__()
+            self.llm = _UsageModel()
+            self.model_parser = ReActTextParser()
+
+        def build_system_prompt(self, state: DemoState) -> str | None:
+            return "System prompt"
+
+        def prepare(self, state: DemoState) -> str:
+            return "Hello"
+
+        def decide(self, state: DemoState, observation: dict[str, Any]):
+            return None
+
+    result = Engine(agent=_Agent(), budget=RuntimeBudget(max_steps=2)).run("demo")
+    ctx = result.records[0].context
+    assert result.state.final_result == "exact"
+    assert ctx["counting_mode"] == "provider_usage"
+    assert ctx["input_tokens_total"] == 123
+    assert ctx["output_tokens"] == 17
+    assert ctx["tokens_total"] == 140

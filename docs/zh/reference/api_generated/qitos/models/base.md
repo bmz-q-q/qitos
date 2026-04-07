@@ -14,11 +14,11 @@
 ## Classes
 
 <a id="class-asyncmodel"></a>
-???+ note "Class: `AsyncModel(self, model: str = 'default', system_prompt: Optional[str] = None, temperature: float = 0.7, max_tokens: int = 2048)`"
+???+ note "Class: `AsyncModel(self, model: str = 'default', system_prompt: Optional[str] = None, temperature: float = 0.7, max_tokens: int = 2048, context_window: Optional[int] = None)`"
     Async model base class
 
 <a id="class-model"></a>
-???+ note "Class: `Model(self, model: str = 'default', system_prompt: Optional[str] = None, temperature: float = 0.7, max_tokens: int = 2048)`"
+???+ note "Class: `Model(self, model: str = 'default', system_prompt: Optional[str] = None, temperature: float = 0.7, max_tokens: int = 2048, context_window: Optional[int] = None)`"
     Unified model calling interface
 
 <a id="class-modelfactory"></a>

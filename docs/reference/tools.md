@@ -162,6 +162,11 @@ Use these as off-the-shelf components, similar to using `torch.nn` blocks.
   - `InMemoryToolLibrary`, `ToolArtifact`, `BaseToolLibrary`
 - Registry builders:
   - `math_tools()`, `editor_tools(workspace_root)`
+  - `security_audit_tools(workspace_root, include_external=False)`
+- Security audit preset:
+  - `SecurityAuditToolSet`
+  - `SECURITY_AUDIT_SYSTEM_PROMPT`
+  - focused example: `examples/real/code_security_audit_agent.py`
 
 Import pattern:
 

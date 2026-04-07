@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Generic, List, TypeVar
+from typing import Any, Dict, Generic, List, TypeVar, cast
 
 from ..core.action import Action
 from ..core.decision import Decision
@@ -37,9 +37,15 @@ class _ActionRuntime(Generic[StateT, ActionT]):
         if engine.executor is None:
             raise RuntimeError("No tool registry configured for action execution")
 
-        actions = [action if isinstance(action, Action) else Action.from_dict(action) for action in decision.actions]
-        for action in actions:
-            engine._memory_append("action", action, record.step_id)
+        actions: List[Action] = []
+        for action in decision.actions:
+            if isinstance(action, Action):
+                actions.append(action)
+                continue
+            payload = action if isinstance(action, dict) else cast(Dict[str, Any], action)
+            actions.append(Action.from_dict(payload))
+        for normalized_action in actions:
+            engine._memory_append("action", normalized_action, record.step_id)
 
         execution = engine.executor.execute(actions, env=engine.env, state=state)
         record.tool_invocations = [

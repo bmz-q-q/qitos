@@ -47,7 +47,8 @@ class OllamaModel(Model):
         system_prompt: Optional[str] = None,
         temperature: float = 0.7,
         timeout: int = 120,
-        format: str = "json"
+        format: str = "json",
+        context_window: Optional[int] = None,
     ):
         """
         初始化 Ollama 模型
@@ -59,12 +60,14 @@ class OllamaModel(Model):
             temperature: 温度参数 (0.0-1.0)
             timeout: 请求超时时间（秒）
             format: 响应格式 ("json" 或 "")
+            context_window: 模型上下文窗口
         """
         super().__init__(
             model=model,
             system_prompt=system_prompt,
             temperature=temperature,
-            max_tokens=4096
+            max_tokens=4096,
+            context_window=context_window,
         )
         
         self.host = host or os.getenv("OLLAMA_BASE_URL") or os.getenv("OLLAMA_HOST", "http://localhost:11434")
@@ -115,6 +118,7 @@ class OllamaModel(Model):
             
             with urllib.request.urlopen(request, timeout=self.timeout) as response:
                 result = json.loads(response.read().decode('utf-8'))
+                self._set_last_usage(self._usage_from_response(result))
                 return self._parse_response(result)
                 
         except urllib.error.HTTPError as e:
@@ -136,12 +140,29 @@ class OllamaModel(Model):
             符合 parse_tool_calls 格式的文本
         """
         message = response.get("message", {})
+        tool_calls = message.get("tool_calls") or []
+        if tool_calls:
+            return self._format_tool_calls(tool_calls)
         content = message.get("content", "")
         
         if content:
             return content.strip()
         
         return ""
+
+    def _usage_from_response(self, response: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        prompt_tokens = response.get("prompt_eval_count")
+        completion_tokens = response.get("eval_count")
+        if prompt_tokens is None and completion_tokens is None:
+            return None
+        total_tokens = None
+        if isinstance(prompt_tokens, int) or isinstance(completion_tokens, int):
+            total_tokens = int(prompt_tokens or 0) + int(completion_tokens or 0)
+        return {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": total_tokens,
+        }
     
     def _format_tool_calls(self, tool_calls: List[Dict[str, Any]]) -> str:
         """
@@ -192,7 +213,8 @@ class OllamaGenerateModel(Model):
         host: Optional[str] = None,
         system_prompt: Optional[str] = None,
         temperature: float = 0.7,
-        timeout: int = 120
+        timeout: int = 120,
+        context_window: Optional[int] = None,
     ):
         """
         初始化 Ollama Generate 模型
@@ -203,12 +225,14 @@ class OllamaGenerateModel(Model):
             system_prompt: 系统提示词
             temperature: 温度参数
             timeout: 超时时间
+            context_window: 模型上下文窗口
         """
         super().__init__(
             model=model,
             system_prompt=system_prompt,
             temperature=temperature,
-            max_tokens=4096
+            max_tokens=4096,
+            context_window=context_window,
         )
         
         self.host = host or os.getenv("OLLAMA_BASE_URL") or os.getenv("OLLAMA_HOST", "http://localhost:11434")
@@ -309,7 +333,8 @@ class LMStudioModel(Model):
         system_prompt: Optional[str] = None,
         temperature: float = 0.7,
         max_tokens: int = 2048,
-        timeout: int = 120
+        timeout: int = 120,
+        context_window: Optional[int] = None,
     ):
         """
         初始化 LM Studio 模型
@@ -326,7 +351,8 @@ class LMStudioModel(Model):
             model=model,
             system_prompt=system_prompt,
             temperature=temperature,
-            max_tokens=max_tokens
+            max_tokens=max_tokens,
+            context_window=context_window,
         )
         
         self.base_url = base_url or os.getenv("LM_STUDIO_BASE_URL", "http://localhost:1234/v1")
@@ -364,6 +390,7 @@ class LMStudioModel(Model):
             
             with urllib.request.urlopen(request, timeout=self.timeout) as response:
                 result = json.loads(response.read().decode('utf-8'))
+                self._set_last_usage(self._usage_from_response(result))
                 return self._parse_response(result)
                 
         except urllib.error.HTTPError as e:
@@ -378,12 +405,55 @@ class LMStudioModel(Model):
         choices = response.get("choices", [])
         if choices:
             message = choices[0].get("message", {})
+            tool_calls = message.get("tool_calls") or []
+            if tool_calls:
+                return self._format_tool_calls(tool_calls)
             content = message.get("content", "")
             
             if content:
                 return content.strip()
         
         return ""
+
+    def _usage_from_response(self, response: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        usage = response.get("usage")
+        if not isinstance(usage, dict):
+            return None
+        prompt_tokens = usage.get("prompt_tokens")
+        completion_tokens = usage.get("completion_tokens")
+        total_tokens = usage.get("total_tokens")
+        if prompt_tokens is None and completion_tokens is None and total_tokens is None:
+            return None
+        return {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": total_tokens,
+        }
+
+    def _format_tool_calls(self, tool_calls: List[Dict[str, Any]]) -> str:
+        parts = []
+        for i, call in enumerate(tool_calls):
+            function = call.get("function", {})
+            name = function.get("name", "")
+            raw_args = function.get("arguments", {})
+            if isinstance(raw_args, str):
+                try:
+                    args = json.loads(raw_args)
+                except Exception:
+                    args = {"raw_args": raw_args}
+            else:
+                args = dict(raw_args or {})
+            if len(tool_calls) > 1:
+                parts.append(f"Action {i + 1}: {name}")
+            else:
+                parts.append(f"Action: {name}")
+            if args:
+                args_str = ", ".join(
+                    f'{k}="{v}"' if isinstance(v, str) else f"{k}={v}"
+                    for k, v in args.items()
+                )
+                parts[-1] += f"({args_str})"
+        return "\n".join(parts)
 
 
 class VLLMModel(Model):
@@ -406,7 +476,8 @@ class VLLMModel(Model):
         system_prompt: Optional[str] = None,
         temperature: float = 0.7,
         max_tokens: int = 2048,
-        timeout: int = 120
+        timeout: int = 120,
+        context_window: Optional[int] = None,
     ):
         """
         初始化 vLLM 模型
@@ -423,7 +494,8 @@ class VLLMModel(Model):
             model=model,
             system_prompt=system_prompt,
             temperature=temperature,
-            max_tokens=max_tokens
+            max_tokens=max_tokens,
+            context_window=context_window,
         )
         
         self.base_url = base_url or os.getenv("VLLM_BASE_URL", "http://localhost:8000/v1")
