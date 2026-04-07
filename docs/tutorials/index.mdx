@@ -1,88 +1,125 @@
 ---
 title: "Tutorials"
-description: "A course-style learning path for researchers designing agents in the QitOS mindmap."
+description: "A self-contained course for researchers designing agents in the QitOS mindmap."
 ---
 
-If you want to learn QitOS the way researchers actually build agents, start here.
+This track is meant to be completed in order.
 
-This track follows one rule: every agent is still the same kernel shape.
+It is not a gallery of examples. It is a course about how to design agents in the QitOS mindmap without guessing where prompt policy, parser choice, tool composition, memory, and traceability belong.
+
+Every lesson keeps the same kernel:
 
 `task -> state -> prompt/protocol -> decision -> tool execution -> reduce -> trace`
 
-What changes from lesson to lesson is not the runtime. What changes is the policy you implement on top of it.
+What changes is the policy layer you build on top of that kernel.
 
-## How to use this track
+## What makes this track different
 
-PyTorch tutorials work well because they do three things clearly: they teach one idea at a time, keep every lesson runnable, and make the next lesson feel like a natural extension of the last one. This QitOS track follows the same pattern.
+Each lesson is written to be self-contained. That means every lesson explicitly covers:
 
-Work through the lessons in order:
+- the exact agent shape you are building
+- the state fields you introduce and why they matter
+- the system prompt or prompt pair you use
+- the parser or protocol contract that matches that prompt
+- the tool surface or preset toolset you expose
+- the model harness you use to talk to the LLM
+- the memory and history choice for that stage of complexity
+- the `qita` trace checkpoints you should inspect after the run
 
-1. Start with ReAct to learn the base loop.
-2. Add explicit planning with PlanAct.
-3. Move to a long-running coding agent with the Claude Code-style preset.
-4. Specialize the same kernel into a domain agent with the security audit workflow.
+If a concept is not introduced yet, that is deliberate. The course is progressive.
 
-## The QitOS mindmap
+## The QitOS design worksheet
 
-When you design an agent in QitOS, you are always answering the same set of questions:
+When you design an agent in QitOS, you are always answering the same questions:
 
 | Design question | QitOS surface | What you decide |
 |---|---|---|
-| What problem is the agent solving? | `task`, `prepare()` | Task framing and prompt-ready context |
-| What must persist across steps? | `StateSchema` | Scratchpads, plans, findings, mode flags, counters |
-| What can the agent do? | `ToolRegistry`, preset toolsets | File edits, shell commands, web fetches, audit scans |
-| How does it decide the next move? | `decide()`, LLM + parser, or plan builders | ReAct loop, plan-first loop, domain-specific control |
-| How does it learn from execution? | `reduce()` | Observation folding, cursor updates, final-result detection |
-| What keeps runs bounded and inspectable? | `max_steps`, `HistoryPolicy`, `qita` | Step budgets, history trimming, replay/export |
+| What problem is the agent solving? | `task`, `prepare()` | The exact objective and the context you surface per step |
+| What must persist across steps? | `StateSchema` | Plans, scratchpads, findings, mode flags, ranked summaries |
+| How does the model know how to respond? | `build_system_prompt()`, `model_parser`, `model_protocol` | Text, JSON, XML, Terminus, MiniMax, or provider-specific harnessing |
+| What can the agent do? | `ToolRegistry`, preset toolsets | Minimal tools, coding presets, audit tools, web tools, task boards |
+| How does the loop learn from execution? | `reduce()` | What becomes state, what stays only in the trace, what counts as success |
+| How do long runs stay under control? | `HistoryPolicy`, `History`, `Memory` | Message trimming, compaction, retrieval, durable memory |
+| How do you inspect behavior? | `TraceWriter`, `qita` | Board, replay, export, prompt hash, parser diagnostics, context telemetry |
 
-That is the mindmap. The point of the tutorials is to make you fluent in changing one branch of that mindmap without breaking the others.
+That worksheet stays constant across all four lessons.
 
-## Recommended path
+## The progression
+
+| Lesson | What you build | New design idea | Prompt and parser | Tools | Context strategy |
+|---|---|---|---|---|---|
+| 1. ReAct | The smallest useful coding agent | Learn the default `LLM -> parser -> Decision` path | `REACT_SYSTEM_PROMPT` + `ReActTextParser` | Manual `ToolRegistry` + compact `CodingToolSet` | No memory, no compaction, tiny scratchpad in state |
+| 2. PlanAct | A planning-first repair agent | Add explicit planning without adding a second runtime | `PLAN_DRAFT_PROMPT` for planning, `PLAN_EXEC_SYSTEM_PROMPT` + `ReActTextParser` for execution | Same compact coding tools | Plan in state, still no separate memory/compaction |
+| 3. Claude Code-style | A long-running coding agent | Move from hand wiring to preset toolsets and workflow prompts | Custom workflow system prompt + `ReActTextParser` | `coding_tools(...)` preset | `HistoryPolicy` first, then when to add `CompactHistory` and memory |
+| 4. Code security audit | A domain-specialized review agent | Specialize the kernel by domain rather than inventing a new runtime | `SECURITY_AUDIT_SYSTEM_PROMPT` + `ReActTextParser`, with protocol upgrade notes | `SecurityAuditToolSet` + codebase/task tools | Ranked finding memory, bounded history, audit-oriented traces |
+
+## How model harnesses fit into the course
+
+The first three lessons use the same simple harness on purpose:
+
+- `OpenAICompatibleModel`
+- text output
+- prompt-injected tool schema
+- `ReActTextParser`
+
+That is the shortest path for learning the kernel.
+
+Later in the course you will also learn how to reason about protocol upgrades:
+
+- stay with ReAct text when you want maximal portability
+- move to JSON or XML when you want stricter output contracts
+- use Terminus protocols when the agent controls a live terminal stream
+- use `MiniMaxToolCallParser` or another model-specific harness when the model emits native structured tool calls
+
+QitOS supports those variants, but the course starts with the most transferable path.
+
+## Recommended order
 
 <CardGroup cols={2}>
   <Card title="Lesson 1: ReAct" icon="brain" href="/tutorials/react">
-    Learn the base thought-action-observation loop with the smallest useful coding agent.
+    Start with the smallest agent that still uses real tools, a real prompt, a real parser, and qita.
   </Card>
   <Card title="Lesson 2: PlanAct" icon="list-check" href="/tutorials/planact">
-    Add explicit planning, a cursor, and a hybrid decide path without changing the kernel.
+    Add explicit planning while keeping execution on the same default Engine path.
   </Card>
   <Card title="Lesson 3: Claude Code-style agent" icon="rectangle-terminal" href="/tutorials/claude-code">
-    Use QitOS presets to build a long-running coding agent with todos, history policy, and workspace tools.
+    Learn preset toolsets, workflow prompts, history control, and when compaction becomes necessary.
   </Card>
   <Card title="Lesson 4: Code security audit agent" icon="shield-check" href="/tutorials/code-security-audit">
-    Specialize the runtime for a defensive security workflow with ranked findings and audit-specific tools.
+    Learn domain specialization, ranked findings, and how to use qita as a review artifact.
   </Card>
 </CardGroup>
 
-## What you should know before lesson 1
+## Before you begin
 
-- You have already run [Quickstart](/quickstart).
-- You understand the basic `AgentModule + Engine` split from [Agent module](/concepts/agent-module) and [Engine](/concepts/engine).
-- You can set `OPENAI_API_KEY` or another OpenAI-compatible endpoint.
+- You have already run [Quickstart](/quickstart) or [First Agent](/guides/build-your-first-agent).
+- You understand the `AgentModule + Engine` split from [Agent module](/concepts/agent-module) and [Engine](/concepts/engine).
+- You can provide an OpenAI-compatible model endpoint such as `OpenAICompatibleModel`.
 
-## What you will know after lesson 4
+## What you should know after lesson 4
 
-You will know how to:
+You should be able to:
 
-- choose between direct LLM-driven ReAct and explicit `decide()` control
-- design state fields that matter instead of building ad hoc scratchpads
-- move from hand-built registries to preset tool bundles
-- add long-running structure with todos, history limits, and qita
-- specialize a generic agent into a domain agent without introducing a second runtime
+- design a system prompt as a protocol contract rather than as vague instructions
+- choose a parser that matches the prompt instead of treating parsing as cleanup
+- decide when to hand-build a registry and when to switch to a preset toolset
+- choose between state-only memory, `HistoryPolicy`, `CompactHistory`, and explicit memory adapters
+- understand when a model-specific harness is worth the extra coupling
+- use `qita` to debug prompt failures, parser failures, bad tool choices, and context collapse
 
 ## Related reading
 
 <CardGroup cols={2}>
   <Card title="Build your first agent" icon="code" href="/guides/build-your-first-agent">
-    Review the base AgentModule contract before starting the track.
+    Review the base AgentModule contract before or alongside the course.
   </Card>
   <Card title="Agent patterns" icon="diagram-project" href="/guides/agent-patterns">
-    See the high-level map of ReAct, PlanAct, Tree-of-Thought, and Reflexion.
+    See the broader map of ReAct, PlanAct, Tree-of-Thought, and Reflexion.
   </Card>
   <Card title="Kit reference" icon="toolbox" href="/reference/kit">
-    Look up parsers, planners, toolsets, and helper APIs used by the lessons.
+    Look up parsers, planners, toolsets, memory, and history helpers used by the lessons.
   </Card>
   <Card title="Observability" icon="chart-line" href="/guides/observability">
-    Inspect every lesson with qita board, replay, and export.
+    Learn how qita board, replay, and export turn traces into research artifacts.
   </Card>
 </CardGroup>

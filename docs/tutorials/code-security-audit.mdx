@@ -1,40 +1,77 @@
 ---
 title: "Lesson 4: Code security audit agent"
-description: "Turn the QitOS kernel into a domain-specific audit agent with defensive security tools, ranked findings, and a reproducible review flow."
+description: "Specialize the QitOS kernel into a reproducible defensive audit agent with domain tools, ranked findings, and review-grade traces."
 ---
 
-This lesson teaches specialization.
+This final lesson answers the hardest question in the course:
 
-You will study `examples/real/code_security_audit_agent.py`, which turns the same `AgentModule + Engine` runtime into a defensive repository-audit agent.
+can the same kernel power a serious domain agent without collapsing into custom orchestration?
 
-## What this lesson teaches in the QitOS mindmap
+The answer in QitOS is yes, but only if you put domain logic in the right places.
 
-| Mindmap branch | What changes in this lesson |
-|---|---|
-| Tools | Combine a domain-specific audit toolset with codebase and task tools |
-| Prompt policy | Use a domain workflow prompt instead of a generic coding prompt |
-| State | Track findings, not just edits or todos |
-| Reduce | Pull structured findings out of tool output and keep a ranked rolling memory |
-| Reproducibility | Seed a demo repo and audit it through the same kernel you already learned |
+You will study `examples/real/code_security_audit_agent.py`.
 
-## Why this lesson matters
+## What changes from lesson 3
 
-This is the lesson that shows whether a framework is genuinely extensible.
+| Branch | Claude Code-style lesson | Security audit lesson |
+|---|---|---|
+| Goal | Modify code and verify a patch | Inspect code, collect evidence, and rank findings |
+| Tool surface | General coding preset | Security audit tools + codebase tools + task board |
+| Prompt policy | Coding workflow discipline | Audit protocol and evidence discipline |
+| State | Todos and mode | Scratchpad and ranked findings |
+| Success condition | Passing verification command | High-signal final audit report |
+| qita usage | Debugging long-running behavior | Producing a review artifact |
 
-If QitOS were only good at toy pattern demos, the runtime would start to break down here. Instead, the lesson keeps the same structure:
+## The system prompt now teaches an audit protocol
 
-- initialize state
-- attach toolsets
-- render a system prompt
-- let the model act
-- reduce observations into audit memory
-- inspect the run with qita
+The lesson uses `SECURITY_AUDIT_SYSTEM_PROMPT`, which says things like:
 
-Only the domain changes.
+```text
+Primary objective:
+- Audit the repository for meaningful security risk, not just keyword matches.
+- Use tools to collect evidence before making strong claims.
+
+Judgment rules:
+- Treat tool output as evidence, not proof.
+- Separate results into:
+  1. confirmed issue
+  2. high-value lead
+  3. human review needed
+- Prefer a small number of high-signal findings over a long noisy list.
+```
+
+This is the final step in the course's prompt design ladder:
+
+- lesson 1: parser contract
+- lesson 2: planner versus executor contracts
+- lesson 3: workflow discipline
+- lesson 4: domain judgment protocol
+
+The runtime still has not changed.
+
+## The parser and harness stay stable
+
+The audit agent still uses:
+
+```python
+model_parser=ReActTextParser()
+```
+
+and a text-first OpenAI-compatible model harness.
+
+That stability is important. It shows that domain specialization does not require a new protocol by default.
+
+You should only move to a model-specific harness if the domain actually benefits from it. For example:
+
+- use JSON/XML contracts when you require stricter machine-readable outputs
+- use a native tool-call parser when your provider produces structured tool calls more reliably than text
+- use Terminus-style protocols when the agent is controlling an interactive terminal rather than calling repository tools directly
+
+QitOS supports those options, but the default research path remains provider-agnostic text ReAct.
 
 <Steps>
   <Step title="Compose the tool surface by domain">
-    The example uses three tool families:
+    The lesson combines three tool families:
 
     ```python
     super().__init__(
@@ -61,15 +98,21 @@ Only the domain changes.
     )
     ```
 
-    This is a core QitOS lesson:
+    This is the capstone lesson in tool composition.
 
-    - use a domain toolset for domain reasoning
-    - add a codebase toolset for low-level inspection
-    - add a task board when the workflow benefits from explicit progress tracking
+    The tool surface now has layers:
+
+    - domain reasoning tools from `SecurityAuditToolSet`
+    - low-level repository inspection from the codebase profile of `CodingToolSet`
+    - explicit progress tracking from `TaskToolSet`
+
+    This is how QitOS wants you to specialize agents:
+
+    by composing the right environment, not by writing a new loop
   </Step>
 
-  <Step title="Encode the audit workflow in the system prompt">
-    The example uses `SECURITY_AUDIT_SYSTEM_PROMPT` and keeps the intended flow visible in `prepare()`:
+  <Step title="Encode the audit method in prompt plus prepare">
+    The prompt provides the audit discipline, and `prepare()` makes the run stage explicit:
 
     ```python
     lines = [
@@ -80,13 +123,10 @@ Only the domain changes.
     ]
     ```
 
-    That one line matters a lot. It tells the model what kind of audit it is running:
+    This is an important pattern:
 
-    - inventory first
-    - then entrypoints and dangerous sinks
-    - then ranked synthesis
-
-    In other words, you are teaching a research protocol, not just asking for "security thoughts."
+    - the system prompt defines the global audit standard
+    - `prepare()` defines the local current-step framing
   </Step>
 
   <Step title="Track findings as first-class state">
@@ -99,18 +139,22 @@ Only the domain changes.
         findings: list[str] = field(default_factory=list)
     ```
 
-    For a domain agent, this is the right question to ask:
+    That is the right design for this domain.
 
-    what do I need the next step to remember?
+    The next model step does not need:
 
-    Here the answer is:
+    - every grep result
+    - every file listing
+    - every intermediate tool payload
+
+    It needs:
 
     - the recent audit trajectory
-    - a compact list of candidate findings
+    - the strongest candidate findings so far
   </Step>
 
-  <Step title="Reduce structured tool output into audit memory">
-    The example does not store every raw scan result forever. It extracts the high-signal parts:
+  <Step title="Use reduce to rank and compress evidence">
+    The example extracts only the highest-signal findings from tool output:
 
     ```python
     if isinstance(first, dict):
@@ -127,57 +171,87 @@ Only the domain changes.
             state.final_result = str(decision.final_answer or "")
     ```
 
-    This is exactly how a research-quality agent should behave:
+    This is the domain-specialized version of the same core lesson:
 
-    - keep the trace complete for observability
-    - keep the state compact for the next step
+    traces keep the raw evidence
+    state keeps the compact working memory
   </Step>
 
-  <Step title="Make the lesson reproducible by seeding the repo">
-    The example seeds a tiny vulnerable demo repository before running:
+  <Step title="Use bounded history, not unlimited accumulation">
+    The example runs with:
 
     ```python
-    def _seed_demo_repo() -> None:
-        WORKSPACE.mkdir(parents=True, exist_ok=True)
-        app = WORKSPACE / "app.py"
-        if not app.exists():
-            app.write_text(
-                "from flask import Flask, request\\n"
-                "import subprocess\\n\\n"
-                "app = Flask(__name__)\\n"
-                "DEBUG = True\\n"
-                "SECRET_KEY = 'prod-secret-value-123456'\\n\\n"
-                "@app.route('/run')\\n"
-                "def run():\\n"
-                "    subprocess.run(request.args.get('cmd'), shell=True)\\n"
-                "    return 'ok'\\n",
-                encoding="utf-8",
-            )
+    history_policy=HistoryPolicy(max_messages=14)
     ```
 
-    This is a strong research habit: make the tutorial runnable without requiring readers to supply their own vulnerable repo.
+    That is a strong default for this audit:
+
+    - enough room for recent reasoning and evidence
+    - not enough room for the model to keep re-reading every old search result verbatim
+
+    If you extend this into a much larger audit, the next upgrade is usually `CompactHistory`, not unbounded history.
   </Step>
 
-  <Step title="Run the audit and study the trace like a review artifact">
-    Run the example:
+  <Step title="Choose memory only if it changes the audit outcome">
+    The example does not attach a separate memory adapter.
+
+    That is correct for a short tutorial audit because:
+
+    - `findings` already acts as compact state memory
+    - `qita` preserves the full trace for later review
+    - a separate retrieval layer would add complexity without improving the lesson
+
+    Add memory when the agent needs one of these:
+
+    - durable cross-run findings
+    - semantic retrieval over previous audits
+    - long-lived notes that should not stay in the immediate prompt
+
+    In that case, you would choose among:
+
+    - `WindowMemory` for recent rolling records
+    - `SummaryMemory` for compressed rolling recall
+    - `VectorMemory` for semantic retrieval
+    - `MarkdownFileMemory` for durable, inspectable storage
+  </Step>
+
+  <Step title="Use qita as a review artifact, not just a debugger">
+    Run:
 
     ```bash
     python examples/real/code_security_audit_agent.py
     ```
 
-    Then inspect it:
+    Inspect:
 
     ```bash
     qita board --logdir runs
     ```
 
-    In the trace, inspect:
+    In this lesson, `qita` is doing more than debugging.
 
-    - whether the agent inventories before scanning deeply
-    - which findings get promoted into `state.findings`
-    - whether the final answer reads like a ranked audit, not an unordered dump
+    Use it to inspect:
+
+    - whether the audit started with inventory before jumping to conclusions
+    - which findings were promoted into `state.findings`
+    - whether parser diagnostics stayed clean
+    - whether context pressure changed the quality of the audit
+    - whether the final answer reads like a ranked review, not a dump of raw matches
   </Step>
 </Steps>
+
+## The final design rule of the course
+
+By the end of lesson 4, the course should make one rule feel obvious:
+
+domain logic belongs in:
+
+- state design
+- prompt policy
+- tool composition
+- `reduce()` semantics
+
+It does not belong in a separate hidden runtime.
 
 ## Full example
 
@@ -185,34 +259,19 @@ The full runnable lesson lives at:
 
 - [`examples/real/code_security_audit_agent.py`](https://github.com/Qitor/qitos/blob/main/examples/real/code_security_audit_agent.py)
 
-## The bigger lesson
-
-If lesson 1 taught you the loop and lesson 3 taught you long-running behavior, lesson 4 teaches the deepest QitOS idea:
-
-the framework is not opinionated about your domain, but it is opinionated about where domain logic belongs.
-
-In QitOS, domain logic belongs in:
-
-- state shape
-- prompt policy
-- tool composition
-- `reduce()` semantics
-
-It does not require a different runtime.
-
-## Where to go after the track
+## Where to go next
 
 <CardGroup cols={2}>
   <Card title="Build your own agent" icon="sparkles" href="/guides/build-your-first-agent">
-    Use the mindmap from these four lessons to design your own AgentModule from scratch.
+    Use the full design worksheet from the course to design your own AgentModule.
   </Card>
   <Card title="Kit reference" icon="toolbox" href="/reference/kit">
-    Look up the concrete parsers, planners, toolsets, and prompts used across the track.
+    Look up parsers, prompts, toolsets, memory, and history helpers used across the course.
+  </Card>
+  <Card title="Observability" icon="chart-line" href="/guides/observability">
+    Deepen your qita workflow for replay, export, and research-grade sharing.
   </Card>
   <Card title="Benchmarks overview" icon="trophy" href="/benchmarks/overview">
     Apply the same kernel to GAIA, Tau-Bench, and CyBench.
-  </Card>
-  <Card title="Observability" icon="chart-line" href="/guides/observability">
-    Deepen your inspection workflow with qita board, replay, and export.
   </Card>
 </CardGroup>

@@ -4,7 +4,7 @@
 
 [![Python](https://img.shields.io/badge/python-3.9%2B-3776AB)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
-[![Docs](https://img.shields.io/badge/docs-qitor.github.io/qitos-0A66C2)](https://qitor.github.io/qitos/)
+[![Docs](https://img.shields.io/badge/docs-qitor.mintlify.app-0A66C2)](https://qitor.mintlify.app/)
 [![PyPI](https://img.shields.io/pypi/v/qitos.svg)](https://pypi.org/project/qitos/)
 [![Repo](https://img.shields.io/badge/github-Qitor%2Fqitos-black)](https://github.com/Qitor/qitos)
 
@@ -12,7 +12,7 @@ Research-first agent framework for building reproducible LLM agents.
 
 QitOS gives you a clean `AgentModule + Engine` kernel, benchmark-ready workflows, and built-in run observability with `qita`.
 
-[Get Started](https://qitor.github.io/qitos/start-here/) · [10-Minute Tutorial](https://qitor.github.io/qitos/getting-started/build_agent_in_10_minutes/) · [Examples](https://qitor.github.io/qitos/tutorials/examples/) · [Changelog](CHANGELOG.md) · [Chinese README](README.zh.md)
+[Get Started](https://qitor.mintlify.app/start-here/) · [10-Minute Tutorial](https://qitor.mintlify.app/getting-started/build_agent_in_10_minutes/) · [Examples](https://qitor.mintlify.app/tutorials/examples/) · [Changelog](CHANGELOG.md) · [Chinese README](README.zh.md)
 
 ## Live Terminal of QitOS for Code Review
 
@@ -41,7 +41,7 @@ Then go deeper:
 
 - Want ReAct? See [`examples/patterns/react.py`](examples/patterns/react.py)
 - Want a coding agent? See [`examples/real/coding_agent.py`](examples/real/coding_agent.py)
-- Want benchmarks? Start with the [benchmark guides](https://qitor.github.io/qitos/builder/benchmark_gaia/)
+- Want benchmarks? Start with the [benchmark guides](https://qitor.mintlify.app/builder/benchmark_gaia/)
 
 ## Why QitOS
 
@@ -85,9 +85,9 @@ class DemoAgent(AgentModule[DemoState, dict[str, Any], Action]):
 
 For a full coding-agent walkthrough and the SWE-style example, see:
 
-- [Build an Agent in 10 Minutes](https://qitor.github.io/qitos/getting-started/build_agent_in_10_minutes/)
-- [Coding Agent Walkthrough](https://qitor.github.io/qitos/tutorials/examples/real_coding/)
-- [SWE Agent Walkthrough](https://qitor.github.io/qitos/tutorials/examples/real_swe/)
+- [Build an Agent in 10 Minutes](https://qitor.mintlify.app/getting-started/build_agent_in_10_minutes/)
+- [Coding Agent Walkthrough](https://qitor.mintlify.app/tutorials/examples/real_coding/)
+- [SWE Agent Walkthrough](https://qitor.mintlify.app/tutorials/examples/real_swe/)
 
 ## Example Gallery
 
@@ -143,15 +143,15 @@ registry = ToolRegistry().include_toolset(
 
 ## Documentation Map
 
-- New here: [Start Here](https://qitor.github.io/qitos/start-here/)
-- First successful run: [Getting Started](https://qitor.github.io/qitos/getting-started/)
-- Writing your first agent: [Build an Agent in 10 Minutes](https://qitor.github.io/qitos/getting-started/build_agent_in_10_minutes/)
-- Understanding the runtime: [Kernel](https://qitor.github.io/qitos/research/kernel/)
-- Framework contracts: [Contracts & Guarantees](https://qitor.github.io/qitos/reference/contracts/)
-- Typical scenarios: [Use Cases](https://qitor.github.io/qitos/use-cases/)
-- Need examples: [Example Walkthroughs](https://qitor.github.io/qitos/tutorials/examples/)
-- Need benchmarks: [GAIA](https://qitor.github.io/qitos/builder/benchmark_gaia/) / [Tau-Bench](https://qitor.github.io/qitos/builder/benchmark_tau/)
-- Need API details: [API Reference](https://qitor.github.io/qitos/reference/api_generated/)
+- New here: [Start Here](https://qitor.mintlify.app/start-here/)
+- First successful run: [Getting Started](https://qitor.mintlify.app/getting-started/)
+- Writing your first agent: [Build an Agent in 10 Minutes](https://qitor.mintlify.app/getting-started/build_agent_in_10_minutes/)
+- Understanding the runtime: [Kernel](https://qitor.mintlify.app/research/kernel/)
+- Framework contracts: [Contracts & Guarantees](https://qitor.mintlify.app/reference/contracts/)
+- Typical scenarios: [Use Cases](https://qitor.mintlify.app/use-cases/)
+- Need examples: [Example Walkthroughs](https://qitor.mintlify.app/tutorials/examples/)
+- Need benchmarks: [GAIA](https://qitor.mintlify.app/builder/benchmark_gaia/) / [Tau-Bench](https://qitor.mintlify.app/builder/benchmark_tau/)
+- Need API details: [API Reference](https://qitor.mintlify.app/reference/api_generated/)
 
 ## Preview
 
@@ -195,7 +195,7 @@ QitOS is currently **Alpha**.
 - User install: `pip install qitos`
 - Repo quickstart: `pip install -r requirements.txt`
 - Full contributor install: `pip install -r requirements-dev.txt`
-- Installation guide: [Installation](https://qitor.github.io/qitos/getting-started/installation/)
+- Installation guide: [Installation](https://qitor.mintlify.app/getting-started/installation/)
 
 ## Contributing
 

@@ -35,7 +35,7 @@ setup(
     license="MIT",
     url="https://github.com/Qitor/qitos",
     project_urls={
-        "Documentation": "https://qitor.github.io/qitos/",
+        "Documentation": "https://qitor.mintlify.app/",
         "Source": "https://github.com/Qitor/qitos",
         "Issues": "https://github.com/Qitor/qitos/issues",
     },

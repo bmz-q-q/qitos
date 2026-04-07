@@ -1,41 +1,95 @@
 ---
 title: "Lesson 3: Claude Code-style agent"
-description: "Build a long-running coding agent on top of QitOS presets and learn how workflow structure, history policy, and observability fit together."
+description: "Build a long-running coding agent and learn when to move from manual registries to presets, history control, and compaction."
 ---
 
-This lesson is where QitOS starts to feel like a real agent framework instead of a pattern sandbox.
+This is where the course moves from "pattern" to "operator workflow."
 
-You will study `examples/real/claude_code_agent.py`, which uses the canonical coding preset and a Claude Code-style workflow prompt to operate over a workspace for multiple steps.
+You are still inside the same QitOS kernel, but now the agent must behave well over many steps inside a workspace. That raises new design questions:
 
-## What this lesson teaches in the QitOS mindmap
+- should you still build the tool surface by hand?
+- how much workflow discipline belongs in the system prompt?
+- when is `HistoryPolicy` enough?
+- when do you need `CompactHistory` or explicit memory?
 
-| Mindmap branch | What you learn here |
-|---|---|
-| Tools | How to use `coding_tools(...)` as a high-leverage preset instead of assembling every tool manually |
-| State | How to track todos, working mode, target file, and verification command |
-| Workflow prompt | How to encode an operating style without changing the runtime |
-| Long-running control | How `HistoryPolicy` and qita help multi-step agents stay tractable |
-| Reduce | How to absorb tool-generated workflow state such as todo lists and mode changes |
+The lesson studies `examples/real/claude_code_agent.py`.
 
-## Why this lesson matters
+## What changes from lesson 2
 
-Researchers often know how to prototype a ReAct loop, but not how to grow it into a long-running agent that still feels legible.
+| Branch | Lesson 2 | Lesson 3 |
+|---|---|---|
+| Tools | Manual registry around a trimmed `CodingToolSet` | `coding_tools(...)` preset registry |
+| Prompt | Planner + executor prompts | One workflow-heavy system prompt |
+| State | Plan and cursor | Todos, mode, target file, verification command, optional doc URL |
+| History | Default behavior | Explicit `HistoryPolicy(max_messages=16, max_tokens=2800)` |
+| Memory | None | Still none by default, but now memory becomes a real design option |
+| Compaction | Not introduced | Introduced as an upgrade path for longer runs |
 
-This example is valuable because it keeps the runtime clean:
+## The system prompt now defines workflow discipline
 
-- still one `AgentModule`
-- still one `Engine`
-- still parser -> `Decision` -> tool execution -> `reduce`
+Unlike lesson 1, this prompt is not just a parser contract. It also encodes operating style:
 
-The difference is that more of the workflow is pushed into:
+```text
+Workflow:
+- Start by writing a todo list with `todo_write`.
+- If you are unsure which tool to use, call `tool_search`.
+- Read before you edit.
+- Make the smallest correct change.
+- Run verification immediately after editing.
+- Only use `web_fetch` or `web_fetch_v2` when the task needs documentation.
+```
 
-- preset tool bundles
-- explicit operator-like system instructions
-- bounded history management
+The full prompt in the example also lists preferred tool patterns and ends with the ReAct output contract:
+
+```text
+Thought: <short reasoning>
+Action: <tool_name>(arg=value, ...)
+or
+Final Answer: <what changed + verification proof>
+```
+
+This is a major QitOS design lesson:
+
+- the runtime stays the same
+- the prompt can still become much more operational
+
+## The parser remains ReAct on purpose
+
+Even though the prompt is richer, the parser is still:
+
+```python
+model_parser=ReActTextParser()
+```
+
+That is deliberate.
+
+You are learning how much of an agent's behavior can be changed through:
+
+- better state
+- better tools
+- better workflow prompting
+
+without changing the parser or protocol.
+
+## The model harness is still text-first
+
+The example still uses `OpenAICompatibleModel`. That means:
+
+- the model returns text
+- the tool schema is injected into the prompt
+- the parser turns text into a `Decision`
+
+This remains a strong default for research because it is:
+
+- easy to compare across providers
+- easy to inspect in traces
+- easy to adapt to local endpoints
+
+If you later need native tool-call protocols, QitOS can support them, but do not pay that coupling cost until it buys you something.
 
 <Steps>
-  <Step title="Start from the preset, not from scratch">
-    The example uses the prebuilt registry returned by `coding_tools(...)`:
+  <Step title="Start from a preset tool registry">
+    The lesson uses:
 
     ```python
     super().__init__(
@@ -51,35 +105,34 @@ The difference is that more of the workflow is pushed into:
     )
     ```
 
-    This is a key QitOS design move. Once you know the kernel, you should stop hand-assembling every coding tool unless the lesson really requires it.
+    This is the point in the course where presets become the right abstraction.
 
-    The preset gives you a coherent coding workspace:
+    `coding_tools(...)` gives you a coherent workspace bundle instead of forcing you to hand-register every file, shell, task, and notebook tool.
 
-    - file inspection and edits
+    The lesson here is:
+
+    - build tools by hand while learning the kernel
+    - switch to presets when the agent surface becomes operationally large
+  </Step>
+
+  <Step title="Understand what the preset is buying you">
+    `coding_tools(...)` is the standard full coding bundle.
+
+    In practice, that gives the agent access to:
+
+    - file inspection and editing
     - shell execution
-    - task and planning helpers
+    - task/todo helpers
     - optional notebook support
-    - documentation fetch tools when enabled
+    - optional web and documentation tools
+
+    Once an agent reaches this level, toolset choice becomes a big part of agent design.
+
+    You are no longer selecting one tool at a time. You are selecting a working environment.
   </Step>
 
-  <Step title="Treat workflow as prompt policy, not hidden code">
-    The lesson's system prompt is very explicit:
-
-    ```text
-    - Start by writing a todo list with `todo_write`.
-    - If you are unsure which tool to use, call `tool_search`.
-    - Read before you edit.
-    - Make the smallest correct change.
-    - Run verification immediately after editing.
-    ```
-
-    That is the right use of prompts in QitOS. The prompt does not replace the runtime. It sets the working discipline inside the runtime.
-
-    This lets you change behavior quickly while keeping traces and interfaces stable.
-  </Step>
-
-  <Step title="Design state for a long-running workspace agent">
-    The state holds workflow signals, not just raw observations:
+  <Step title="Design state for long-running work">
+    The state now carries workflow signals:
 
     ```python
     @dataclass
@@ -92,16 +145,20 @@ The difference is that more of the workflow is pushed into:
         mode: str = "work"
     ```
 
-    Why this shape works:
+    Why this state shape works:
 
-    - `todos` exposes an explicit work queue
+    - `todos` exposes a work queue that survives multiple steps
     - `mode` lets the agent remember whether it is planning or executing
-    - `doc_url` gives you optional external grounding without hard-coding browsing
-    - `scratchpad` keeps a recent compressed trajectory
+    - `doc_url` adds optional external grounding without forcing browsing
+    - `scratchpad` keeps the recent compressed trajectory
+
+    This is more advanced than lesson 2, but it is still disciplined:
+
+    every field exists because it changes future behavior
   </Step>
 
-  <Step title="Let tools feed workflow state back into reduce">
-    The example's `reduce()` listens for structured results from the preset tools:
+  <Step title="Use reduce to absorb structured tool output">
+    `reduce()` listens for tool-driven workflow state:
 
     ```python
     if isinstance(first, dict):
@@ -119,44 +176,113 @@ The difference is that more of the workflow is pushed into:
         state.mode = str(state.metadata.get("mode"))
     ```
 
-    This is a very important QitOS pattern:
+    This is the long-running agent version of the same old lesson:
 
-    tools do work, but `reduce()` is still where the agent decides what that work means for future steps.
+    tools do work, but `reduce()` still decides what the agent should remember.
   </Step>
 
-  <Step title="Bound the run with history policy">
-    Long-running agents need memory discipline.
-
-    The example passes:
+  <Step title="Introduce explicit history control">
+    The run passes:
 
     ```python
     history_policy=HistoryPolicy(max_messages=16, max_tokens=2800)
     ```
 
-    This is where QitOS becomes more research-useful than a loose loop. You can study how history truncation interacts with behavior instead of treating context blow-up as an accidental side effect.
+    This is the first course lesson where message-window management matters.
+
+    `HistoryPolicy` answers:
+
+    - how many recent messages are retained
+    - how many tokens can be spent on history
+    - when older interaction context stops being sent verbatim
+
+    This is not the same as memory and not the same as compaction.
+  </Step>
+
+  <Step title="Learn the boundary between history, compaction, and memory">
+    In this lesson, the example still does not attach a custom `history=` or `memory=`.
+
+    That is a meaningful choice:
+
+    - `HistoryPolicy` controls the message budget
+    - state stores immediate workflow artifacts like todos and mode
+    - no separate memory store is needed yet
+
+    Add `CompactHistory` when the run becomes long enough that simple trimming loses too much context:
+
+    ```python
+    from qitos.kit import CompactConfig, CompactHistory, WindowMemory
+
+    super().__init__(
+        toolset=[coding_tools(workspace_root=workspace_root)],
+        llm=llm,
+        model_parser=ReActTextParser(),
+        history=CompactHistory(
+            llm=llm,
+            config=CompactConfig(
+                max_tokens=2800,
+                keep_last_messages=10,
+                keep_last_rounds=4,
+            ),
+        ),
+        memory=WindowMemory(window_size=30),
+    )
+    ```
+
+    Read that carefully:
+
+    - `HistoryPolicy` trims the message request
+    - `CompactHistory` summarizes and preserves old interaction history
+    - `Memory` stores reusable records outside the immediate message stream
+
+    Those are three different layers.
+  </Step>
+
+  <Step title="Understand when to upgrade the protocol">
+    This lesson still uses text ReAct, and that is usually the right call.
+
+    Consider a protocol upgrade only when you need something specific:
+
+    - JSON or XML if you need stricter structured output than text ReAct
+    - Terminus if the agent is driving a live terminal session
+    - a model-specific parser such as `MiniMaxToolCallParser` if the provider emits native structured tool calls you actually want to preserve
+
+    Do not upgrade the protocol just because the agent became more advanced.
   </Step>
 
   <Step title="Run it like an operator and inspect it like a researcher">
-    Run the example:
+    Run:
 
     ```bash
     python examples/real/claude_code_agent.py
     ```
 
-    Then inspect it:
+    Inspect:
 
     ```bash
     qita board --logdir runs
     ```
 
-    What to look for:
+    In `qita`, inspect:
 
-    - whether todos appear early and stay updated
-    - whether the agent switches mode coherently
-    - whether verification happens immediately after edits
-    - how the trajectory changes when history trimming kicks in
+    - whether todos appear early and remain coherent
+    - whether `mode` changes match the intended workflow
+    - how the prompt and parser still stay in the simple ReAct path
+    - whether history trimming changes the model's behavior
+    - whether the run would benefit from `CompactHistory`
   </Step>
 </Steps>
+
+## The right mental model for long-running agents
+
+By this point in the course, you should think in layers:
+
+- state is what the next step definitely needs
+- history is what the next model call may need
+- compaction is how old history is compressed
+- memory is what should outlive the immediate turn structure
+
+That separation is one of the most important QitOS design decisions.
 
 ## Full example
 
@@ -164,21 +290,24 @@ The full runnable lesson lives at:
 
 - [`examples/real/claude_code_agent.py`](https://github.com/Qitor/qitos/blob/main/examples/real/claude_code_agent.py)
 
-## What to experiment with next
-
-- Swap the workflow prompt from "Claude Code-style" to your own lab protocol.
-- Tighten or loosen `HistoryPolicy` and compare the traces.
-- Add a documentation URL and inspect when the agent chooses to fetch it.
-
 ## What lesson 4 adds
 
-The final lesson keeps the same runtime shape but changes the domain and tool surface. Instead of editing code to satisfy a test, the agent will inspect a repository and rank security findings.
+Lesson 4 keeps the long-running structure, but changes the domain completely.
+
+That means you will learn how to specialize:
+
+- tool composition
+- prompt policy
+- state semantics
+- `reduce()` logic
+
+without inventing a new runtime.
 
 <CardGroup cols={2}>
   <Card title="Next lesson: Code security audit agent" icon="shield-check" href="/tutorials/code-security-audit">
-    Learn how to specialize QitOS into a defensive security workflow without changing the kernel.
+    Turn the same kernel into a defensive review agent with ranked findings and audit-specific traces.
   </Card>
   <Card title="Related guide: observability" icon="chart-line" href="/guides/observability">
-    Review qita board, replay, and export if you want to study long runs more deeply.
+    Review qita board, replay, and export before studying the final audit workflow.
   </Card>
 </CardGroup>

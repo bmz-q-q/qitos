@@ -1,59 +1,129 @@
 ---
 title: "Lesson 1: ReAct"
-description: "Build a ReAct agent in QitOS and learn the base research loop: state, prompt-parser contract, tools, reduce, and qita."
+description: "Build the first real QitOS agent and learn the full prompt-parser-tool-reduce loop from end to end."
 ---
 
-This lesson teaches the smallest QitOS agent that still feels like real research work.
+This is the first complete agent in the course.
 
-You will build the ReAct coding agent from `examples/patterns/react.py`. The task is intentionally simple: open a buggy Python file, fix it, and run a verification command. The point is not the bug. The point is to learn the core loop.
+It is small on purpose, but it is not fake. You will build a real coding agent with:
 
-## What this lesson teaches in the QitOS mindmap
+- a typed state
+- a real LLM harness
+- a real system prompt
+- a real parser
+- real tools
+- a real `reduce()` loop
+- real `qita` traces
 
-| Mindmap branch | What you learn here |
-|---|---|
-| Task framing | How to turn a concrete repo task into `prepare()` text |
-| State | How to store a scratchpad and task-specific fields |
-| Tools | How to expose a compact coding surface through `CodingToolSet` |
-| Prompt and parser | Why `REACT_SYSTEM_PROMPT` must match `ReActTextParser` |
-| Reduce | How to fold tool output back into state and detect completion |
-| Observability | How to inspect the full trajectory with `qita` |
+You will study `examples/patterns/react.py`, but the lesson is written so you do not need to reverse-engineer that file to understand why it works.
 
-## Before you start
+## What you are building
 
-- Install QitOS and model support:
+The task is tiny:
 
-```bash
-pip install "qitos[models]"
+- open `buggy_module.py`
+- fix `add(a, b)` so it returns `a + b`
+- run a verification command
+
+That small task is useful because it lets you see the whole QitOS kernel without extra orchestration noise.
+
+## The design for this lesson
+
+| Design branch | Choice in this lesson | Why this is the right first choice |
+|---|---|---|
+| Task shape | One-file bug fix with one verification command | Easy to verify, easy to trace |
+| State | `scratchpad`, `target_file`, `test_command` | Just enough to influence the next step |
+| Model harness | `OpenAICompatibleModel` returning text | Simple and portable across providers |
+| Prompt contract | `REACT_SYSTEM_PROMPT` | Explicit one-tool-per-turn text protocol |
+| Parser | `ReActTextParser` | Direct match for `Thought:` / `Action:` output |
+| Tools | Compact `CodingToolSet` inside a manual `ToolRegistry` | Learn tool design before presets |
+| Memory | None | The run is too short to justify separate memory |
+| History | Default Engine history behavior | Do not introduce context control before you need it |
+| Traceability | `qita board` | Learn to inspect the kernel from day one |
+
+## Why we start with the text ReAct harness
+
+The first lesson uses:
+
+```python
+OpenAICompatibleModel(...)
 ```
 
-- Export an API key:
+with:
 
-```bash
-export OPENAI_API_KEY="sk-..."
+```python
+model_parser=ReActTextParser()
 ```
 
-- Optional provider override:
+That gives you the most transparent possible path:
 
-```bash
-export OPENAI_BASE_URL="https://api.siliconflow.cn/v1/"
-export QITOS_MODEL="Qwen/Qwen3-8B"
+`messages -> text model output -> ReAct parser -> Decision -> tool execution`
+
+We do not start with native tool calling, XML, JSON, or model-specific harnesses because those add coupling before you understand the core loop.
+
+## The system prompt is a contract, not decoration
+
+The lesson uses the canonical ReAct prompt:
+
+```text
+You are a reliable ReAct agent.
+
+Rules:
+- Use at most one tool call per response.
+- Never invent tool names or arguments.
+- If a tool result is enough to conclude, output final answer directly.
+
+Output contract (strict):
+Thought: <one concise reasoning sentence>
+Action: <tool_name>(arg=value, ...)
+or
+Final Answer: <final answer only>
 ```
 
-## The lesson idea
+In code, that is:
 
-ReAct is the best first lesson because it keeps the design surface small:
+```python
+def build_system_prompt(self, state: ReactState) -> str | None:
+    return render_prompt(
+        REACT_SYSTEM_PROMPT,
+        {"tool_schema": self.tool_registry.get_tool_descriptions()},
+    )
+```
 
-- `prepare()` builds the current task context
-- the Engine calls the LLM
-- `ReActTextParser` converts text output into `Decision`
-- tools execute
-- `reduce()` records the new trajectory
+This matters because `ReActTextParser` is not doing magic. It expects exactly this style of output.
 
-Nothing extra is hidden. You can see the whole runtime.
+The first durable QitOS lesson is:
+
+- prompt format and parser choice are one design decision
+- if you change one, you usually need to change the other
+
+## The full model harness for this lesson
+
+The example builds the model like this:
+
+```python
+def build_model() -> OpenAICompatibleModel:
+    return OpenAICompatibleModel(
+        model=MODEL_NAME,
+        api_key=api_key,
+        base_url=MODEL_BASE_URL,
+        temperature=0.2,
+        max_tokens=2048,
+    )
+```
+
+Why this harness is appropriate here:
+
+- it works with OpenAI-compatible endpoints
+- it keeps the response in plain text
+- it stays compatible with the prompt-injection tool schema path used by `REACT_SYSTEM_PROMPT`
+- it keeps the lesson portable across research labs and local gateways
+
+You are not choosing the "best model" here. You are choosing the simplest harness that exposes the kernel clearly.
 
 <Steps>
-  <Step title="Design the state around the trajectory you care about">
-    In this lesson, state is not a generic bag of fields. It carries exactly the information the next model step needs:
+  <Step title="Design the state around the next step">
+    The state is intentionally small:
 
     ```python
     @dataclass
@@ -67,15 +137,17 @@ Nothing extra is hidden. You can see the whole runtime.
 
     Why these fields?
 
-    - `scratchpad` keeps the recent `Thought / Action / Observation` trajectory.
-    - `target_file` keeps the task grounded in one concrete artifact.
-    - `test_command` turns "done" into a verifiable condition.
+    - `scratchpad` stores the compressed trajectory that the next model step can use
+    - `target_file` keeps the agent grounded in one artifact
+    - `test_command` turns "done" into an executable success condition
 
-    This is the first QitOS habit to build: add only the state fields that change the next step.
+    This is your first QitOS habit:
+
+    add only state that changes future decisions
   </Step>
 
   <Step title="Expose a minimal tool surface">
-    The example uses `CodingToolSet`, but trims it down to the smallest useful subset for this task:
+    The example uses a manual registry so you can see exactly what is being exposed:
 
     ```python
     registry = ToolRegistry()
@@ -91,17 +163,19 @@ Nothing extra is hidden. You can see the whole runtime.
     )
     ```
 
-    This is important. In QitOS, tool design is part of agent design. You do not have to expose the full kitchen sink just because the preset exists.
+    This is important. `CodingToolSet` is a bundle, but you still control its surface.
 
-    For a first ReAct agent, a compact local coding surface is ideal:
+    For lesson 1, the right tool surface is just enough to:
 
     - inspect files
     - edit files
-    - run a verification command
+    - run the verification command
+
+    Do not expose a richer toolset until the task requires it.
   </Step>
 
   <Step title="Bind the prompt to the parser">
-    The example uses the canonical ReAct prompt and parser pair:
+    The agent constructor pairs the prompt contract and the parser:
 
     ```python
     super().__init__(
@@ -111,24 +185,17 @@ Nothing extra is hidden. You can see the whole runtime.
     )
     ```
 
-    ```python
-    def build_system_prompt(self, state: ReactState) -> str | None:
-        return render_prompt(
-            REACT_SYSTEM_PROMPT,
-            {"tool_schema": self.tool_registry.get_tool_descriptions()},
-        )
-    ```
+    Read that as one sentence:
 
-    This pairing is the most important contract in the lesson.
+    "This agent asks the model to speak ReAct text, and the Engine parses that text with the ReAct parser."
 
-    - `REACT_SYSTEM_PROMPT` asks the model for `Thought:` and `Action:`
-    - `ReActTextParser` expects exactly that shape
+    In QitOS, this pairing is the harness.
 
-    If you change one without the other, the agent does not become "more flexible". It just becomes parse-error-prone.
+    Later lessons will change prompts and protocols. For now, keep this pair fixed.
   </Step>
 
   <Step title="Prepare only the context the next step needs">
-    `prepare()` turns the state into the model-ready user turn:
+    `prepare()` curates the current step's input:
 
     ```python
     def prepare(self, state: ReactState) -> str:
@@ -144,11 +211,13 @@ Nothing extra is hidden. You can see the whole runtime.
         return "\n".join(lines)
     ```
 
-    This is the second QitOS habit to build: `prepare()` should not dump your whole state blindly. It should curate the next prompt.
+    This is the second core habit:
+
+    `prepare()` is not a state dump. It is a prompt-ready view of state.
   </Step>
 
-  <Step title="Use reduce to make the loop learn from itself">
-    The learning in ReAct happens inside `reduce()`:
+  <Step title="Use reduce to define what the agent remembers">
+    ReAct learns inside `reduce()`:
 
     ```python
     def reduce(
@@ -175,33 +244,59 @@ Nothing extra is hidden. You can see the whole runtime.
         return state
     ```
 
-    The lesson here is simple:
+    Three lessons are hidden in this one function:
 
-    - state stores what the next step should remember
-    - `reduce()` is where you decide what counts as memory
-    - `state.final_result` is the cleanest stop signal for success
+    - not every observation belongs in future context
+    - state is where you keep the compressed working memory
+    - `final_result` is a clean, explicit success signal
   </Step>
 
-  <Step title="Run and inspect the lesson end to end">
-    Run the example directly:
+  <Step title="Notice what we are not using yet">
+    We do not use:
+
+    - `decide()` overrides
+    - explicit planning
+    - memory adapters
+    - custom history implementations
+    - context compaction
+    - model-specific protocol overrides
+
+    That is not because QitOS lacks them. It is because lesson 1 is about seeing the default path clearly before you bend it.
+  </Step>
+
+  <Step title="Run the example and inspect the kernel with qita">
+    Run it:
 
     ```bash
     python examples/patterns/react.py
     ```
 
-    Then inspect the run:
+    Then inspect it:
 
     ```bash
     qita board --logdir runs
     ```
 
-    What you should inspect in `qita`:
+    In `qita`, check:
 
-    - whether the model keeps the file path and verification command in context
-    - whether the parser emits clean `Thought` and `Action` records
-    - whether the final successful shell result is the moment `final_result` is set
+    - the exact prompt text sent to the model
+    - whether the parser produced clean `Thought` and `Action` fields
+    - whether the tool output made the verification condition obvious
+    - whether `final_result` is set at the first true success condition
   </Step>
 </Steps>
+
+## Why there is no separate memory or compaction yet
+
+For this lesson, the right memory choice is "none."
+
+Why:
+
+- the run is short
+- the useful context is already visible in `scratchpad`
+- adding retrieval or compaction here would blur the architecture before you understand it
+
+In QitOS, memory is not a badge of sophistication. It is an answer to a concrete long-run problem.
 
 ## Full example
 
@@ -209,23 +304,17 @@ The full runnable lesson lives at:
 
 - [`examples/patterns/react.py`](https://github.com/Qitor/qitos/blob/main/examples/patterns/react.py)
 
-## What to change on your own
+## What lesson 2 changes
 
-After you run the lesson once, try these variations:
+Lesson 2 keeps the same model harness and the same execution parser, but introduces a new idea:
 
-- Change `target_file` and `test_command` to another tiny repair task.
-- Replace the coding task with a file-inspection task and keep the same ReAct loop.
-- Increase the scratchpad window from `8` and see how the trajectory changes.
-
-## What lesson 2 adds
-
-ReAct is good when the next action is local and opportunistic. PlanAct is better when the task has an obvious multi-step structure and you want the model to commit to a plan before acting.
+planning should become explicit state and explicit control flow, not a longer hidden thought.
 
 <CardGroup cols={2}>
   <Card title="Next lesson: PlanAct" icon="list-check" href="/tutorials/planact">
-    Add explicit planning, a plan cursor, and a hybrid decide path on top of the same kernel.
+    Add a planner, a cursor, and a `decide()` gate without changing the core runtime.
   </Card>
-  <Card title="Related concept: Engine" icon="gear" href="/concepts/engine">
-    Review how the default model path works when `decide()` returns `None`.
+  <Card title="Related reference: kit" icon="toolbox" href="/reference/kit">
+    Review `ReActTextParser`, prompt templates, and coding tool surfaces used in this lesson.
   </Card>
 </CardGroup>

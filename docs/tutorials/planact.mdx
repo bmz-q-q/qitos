@@ -1,36 +1,104 @@
 ---
 title: "Lesson 2: PlanAct"
-description: "Extend the ReAct loop with explicit planning and learn how QitOS combines custom decide logic with the default model path."
+description: "Add explicit planning to the ReAct kernel and learn how QitOS separates planner control from executor control."
 ---
 
-This lesson builds on ReAct instead of replacing it.
+This lesson is the first time you deliberately bend the default loop.
 
-You will use `examples/patterns/planact.py` to learn one of the most important QitOS design moves: keep the same runtime, but intercept part of the control flow in `decide()`.
+You are still building an ordinary QitOS agent, but now you will introduce:
 
-## What this lesson teaches in the QitOS mindmap
+- a planning artifact in state
+- a planner prompt separate from the execution prompt
+- a `decide()` override that only handles the planning boundary
 
-| Mindmap branch | What changes from ReAct |
-|---|---|
-| State | Add a plan list and execution cursor |
-| Decision policy | Use custom `decide()` for planning, then fall back to the Engine model path |
-| Planning | Generate an explicit numbered plan with `NumberedPlanBuilder` |
-| Reduce | Advance the cursor when a plan step succeeds |
-| Runtime reasoning | Separate "plan creation" from "plan execution" without adding a second loop |
+The key idea is that you still do **not** introduce a second runtime.
 
-## Why PlanAct matters
+## What changes from lesson 1
 
-Researchers often jump from "pure ReAct" to "I need a whole new orchestrator". QitOS is designed to keep that jump small.
+| Branch | Lesson 1 | Lesson 2 |
+|---|---|---|
+| Control | Default LLM path every step | `decide()` intercepts only the planning boundary |
+| Prompting | One ReAct system prompt | One planning prompt plus one execution prompt |
+| State | Scratchpad + task fields | Add `plan_steps` and `cursor` |
+| Parser | `ReActTextParser` | Still `ReActTextParser` for execution |
+| Tools | Compact coding tools | Same compact coding tools |
+| Memory and history | None beyond state | Still no separate memory or compaction |
 
-PlanAct shows the intended move:
+That last row matters. You are adding planning, not context complexity.
 
-- use `decide()` for the small amount of control that must be manual
-- use the default Engine LLM path for the rest
+## The two-prompt architecture
 
-That is one of the most reusable patterns in this project.
+This lesson uses two prompt contracts.
+
+### Planner prompt
+
+```text
+You are a planning module.
+Break the task into 3-7 atomic executable steps.
+
+Constraints:
+- Each step must be actionable and verifiable.
+- Prefer tool-executable operations over vague reasoning.
+- No prose outside the numbered list.
+```
+
+In code, that is `PLAN_DRAFT_PROMPT`.
+
+### Executor prompt
+
+```text
+You are the execution module for a Plan-Act agent.
+
+You will receive the global task and one current plan step.
+Execute only the current step. Do not jump ahead.
+
+Output contract (strict):
+Thought: <one sentence>
+Action: <tool_name>(arg=value, ...)
+or
+Final Answer: <step result>
+```
+
+In code, that is `PLAN_EXEC_SYSTEM_PROMPT`.
+
+The design lesson is:
+
+- planning and acting can use different prompts
+- but they still flow through the same `AgentModule + Engine` runtime
+
+## The parser story in this lesson
+
+The planner path does **not** use `ReActTextParser`.
+
+Instead:
+
+- `_plan()` renders `PLAN_DRAFT_PROMPT`
+- `NumberedPlanBuilder` calls the same LLM harness
+- the builder parses a numbered list into `list[str]`
+
+The execution path **does** use `ReActTextParser`.
+
+That means lesson 2 already teaches a subtle but important QitOS idea:
+
+different phases of the same agent can use different parsing contracts, as long as the control boundary is explicit.
+
+## The model harness stays intentionally boring
+
+Just like lesson 1, the example uses:
+
+```python
+OpenAICompatibleModel(...)
+```
+
+Why keep the same harness?
+
+- so you can isolate the effect of planning
+- so prompt and parser changes are easy to interpret
+- so the new lesson teaches one new idea instead of five
 
 <Steps>
   <Step title="Extend state with a plan and a cursor">
-    The PlanAct example adds just enough structure to track progress:
+    The state adds only what execution needs:
 
     ```python
     @dataclass
@@ -42,21 +110,24 @@ That is one of the most reusable patterns in this project.
         scratchpad: list[str] = field(default_factory=list)
     ```
 
-    The key design idea is that the plan is state, not hidden prompt text. That makes it:
+    This is the first time the course makes a hidden reasoning artifact explicit.
 
-    - inspectable in traces
-    - editable by your own logic
-    - reusable across steps
+    Why store the plan in state?
+
+    - the trace can show it
+    - `prepare()` can surface it
+    - `reduce()` can advance it
+    - your own logic can rewrite it later if needed
   </Step>
 
-  <Step title="Add a dedicated planner instead of improvising in the loop">
-    The example initializes a `NumberedPlanBuilder` once:
+  <Step title="Use a dedicated plan builder">
+    The planner is initialized once:
 
     ```python
     self.plan_builder = NumberedPlanBuilder()
     ```
 
-    Then `_plan()` creates a concrete numbered list from `PLAN_DRAFT_PROMPT`:
+    And called like this:
 
     ```python
     prompt = render_prompt(
@@ -72,11 +143,13 @@ That is one of the most reusable patterns in this project.
     plan = self.plan_builder.build(self.llm, prompt)
     ```
 
-    This is the QitOS lesson: planning is a first-class artifact, not just a longer thought.
+    This is the right QitOS move:
+
+    planning becomes a named artifact with a dedicated parser, not an unstructured paragraph in the main scratchpad.
   </Step>
 
-  <Step title="Use decide as the planning gate">
-    The core control logic is only a few lines:
+  <Step title="Use decide only as the planning gate">
+    The control logic is small:
 
     ```python
     def decide(self, state: PlanActState, observation: dict[str, Any]):
@@ -87,17 +160,47 @@ That is one of the most reusable patterns in this project.
         return None
     ```
 
-    This is the lesson's main idea:
+    That `return None` is the whole point.
 
-    - when the plan is missing, `decide()` handles it directly
-    - once the plan exists, `decide()` returns `None`
-    - the Engine resumes its normal LLM + parser execution path
+    Once a plan exists, the Engine goes back to its default LLM path:
 
-    You are not writing a second runtime. You are shaping the default one.
+    `prompt -> ReActTextParser -> Decision -> tool execution`
+
+    So lesson 2 is not about replacing the runtime. It is about adding one explicit control boundary to it.
+  </Step>
+
+  <Step title="Bind execution prompt and parser clearly">
+    Execution still uses:
+
+    ```python
+    super().__init__(
+        tool_registry=registry,
+        llm=llm,
+        model_parser=ReActTextParser(),
+    )
+    ```
+
+    and:
+
+    ```python
+    def build_system_prompt(self, state: PlanActState) -> str | None:
+        return render_prompt(
+            PLAN_EXEC_SYSTEM_PROMPT,
+            {
+                "current_step": self._current_step_text(state),
+                "tool_schema": self.tool_registry.get_tool_descriptions(),
+            },
+        )
+    ```
+
+    So the planning phase and the execution phase are visibly different:
+
+    - numbered plan builder for planning
+    - ReAct text contract for execution
   </Step>
 
   <Step title="Make the plan visible in prepare">
-    `prepare()` exposes both the plan and the active cursor:
+    `prepare()` now renders both the global task and the current plan step:
 
     ```python
     def prepare(self, state: PlanActState) -> str:
@@ -109,11 +212,17 @@ That is one of the most reusable patterns in this project.
         ]
     ```
 
-    This is what makes the execution phase different from plain ReAct. The model is not reasoning over the whole task again each step. It is reasoning over one explicit plan step.
+    This changes the agent's working memory shape.
+
+    Instead of re-reasoning over the entire task every step, the model reasons over:
+
+    - one task
+    - one explicit plan
+    - one current plan item
   </Step>
 
-  <Step title="Advance the cursor in reduce">
-    The execution bookkeeping belongs in `reduce()`:
+  <Step title="Advance plan progress in reduce">
+    Progress becomes ordinary state logic:
 
     ```python
     if isinstance(first, dict) and first.get("status") == "success":
@@ -123,20 +232,31 @@ That is one of the most reusable patterns in this project.
         state.cursor = len(state.plan_steps)
     ```
 
-    There are two important habits here:
+    The important lesson is not the exact condition. It is the placement:
 
-    - treat "plan progress" as state, not hidden control flow
-    - use verifiable tool output to advance the agent
+    `reduce()` is where you decide what counts as plan completion.
   </Step>
 
-  <Step title="Run the lesson and inspect the plan boundary">
-    Run the example:
+  <Step title="Keep memory and history simple on purpose">
+    Lesson 2 still does not add:
+
+    - a memory adapter
+    - `HistoryPolicy` tuning
+    - `CompactHistory`
+
+    Why not?
+
+    Because the plan itself already compresses the task into a better working form. Introducing context compaction here would blur whether behavior changed because of planning or because of context management.
+  </Step>
+
+  <Step title="Run it and inspect the planning boundary in qita">
+    Run:
 
     ```bash
     python examples/patterns/planact.py
     ```
 
-    Then inspect it:
+    Inspect:
 
     ```bash
     qita board --logdir runs
@@ -146,9 +266,25 @@ That is one of the most reusable patterns in this project.
 
     - the step where `Decision.wait("plan_ready")` appears
     - the moment `plan_steps` becomes part of state
-    - how later steps still use the ordinary ReAct parser
+    - the fact that later execution still uses the same ReAct parser path
   </Step>
 </Steps>
+
+## Why PlanAct is still the same kernel
+
+Researchers often think adding planning requires:
+
+- a separate planner service
+- a planner-executor loop outside the framework
+- a second agent runtime
+
+This lesson is showing the opposite design:
+
+- a planner is just another controlled model call
+- a plan is just another state artifact
+- execution is still the normal Engine path
+
+That is one of the deepest QitOS ideas.
 
 ## Full example
 
@@ -156,29 +292,22 @@ The full runnable lesson lives at:
 
 - [`examples/patterns/planact.py`](https://github.com/Qitor/qitos/blob/main/examples/patterns/planact.py)
 
-## When to choose PlanAct over ReAct
-
-Choose PlanAct when:
-
-- the task has a natural decomposition
-- you want to display or inspect an explicit plan
-- step ordering matters more than opportunistic local reasoning
-
-Stay with ReAct when:
-
-- the task is highly open-ended
-- the next useful action depends heavily on the last observation
-- upfront planning tends to be brittle
-
 ## What lesson 3 adds
 
-The next lesson moves from "pattern tutorial" to "real long-running agent". The kernel is still the same, but the tool surface, history controls, and workflow prompt become more operational.
+Lesson 3 keeps the same kernel again, but now the agent becomes operationally long-running.
+
+That means you will finally introduce:
+
+- preset toolsets instead of manual wiring
+- a workflow-oriented system prompt
+- explicit history control
+- the point where context compaction and memory become real design questions
 
 <CardGroup cols={2}>
   <Card title="Next lesson: Claude Code-style agent" icon="rectangle-terminal" href="/tutorials/claude-code">
-    Learn how QitOS presets support long-running coding workflows with todos and mode tracking.
+    Move from pattern design to a long-running workspace agent with presets, history policy, and qita-driven debugging.
   </Card>
-  <Card title="Related guide: agent patterns" icon="diagram-project" href="/guides/agent-patterns">
-    Compare ReAct, PlanAct, Tree-of-Thought, and Reflexion at a high level.
+  <Card title="Related guide: memory and history" icon="clock-rotate-left" href="/guides/memory-and-history">
+    Review the distinction between state, history, compaction, and memory before the long-running lesson.
   </Card>
 </CardGroup>

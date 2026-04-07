@@ -4,7 +4,7 @@
 
 [![Python](https://img.shields.io/badge/python-3.9%2B-3776AB)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
-[![Docs](https://img.shields.io/badge/docs-qitor.github.io/qitos-0A66C2)](https://qitor.github.io/qitos/)
+[![Docs](https://img.shields.io/badge/docs-qitor.mintlify.app-0A66C2)](https://qitor.mintlify.app/)
 [![PyPI](https://img.shields.io/pypi/v/qitos.svg)](https://pypi.org/project/qitos/)
 [![Repo](https://img.shields.io/badge/github-Qitor%2Fqitos-black)](https://github.com/Qitor/qitos)
 
@@ -12,7 +12,7 @@
 
 QitOS 提供清晰的 `AgentModule + Engine` 内核、benchmark-ready 工作流，以及内建的 `qita` 运行可观测能力。
 
-[开始上手](https://qitor.github.io/qitos/zh/start-here/) · [10 分钟教程](https://qitor.github.io/qitos/zh/getting-started/build_agent_in_10_minutes/) · [示例总览](https://qitor.github.io/qitos/tutorials/examples/) · [English README](README.md)
+[开始上手](https://qitor.mintlify.app/zh/start-here/) · [10 分钟教程](https://qitor.mintlify.app/zh/getting-started/build_agent_in_10_minutes/) · [示例总览](https://qitor.mintlify.app/tutorials/examples/) · [English README](README.md)
 
 ## Live Terminal of QitOS for Code Review
 
@@ -41,7 +41,7 @@ qita board --logdir runs
 
 - 想看 ReAct：见 [`examples/patterns/react.py`](examples/patterns/react.py)
 - 想看 coding agent：见 [`examples/real/coding_agent.py`](examples/real/coding_agent.py)
-- 想看 benchmark：从 [评测指南](https://qitor.github.io/qitos/zh/builder/benchmark_gaia/) 开始
+- 想看 benchmark：从 [评测指南](https://qitor.mintlify.app/zh/builder/benchmark_gaia/) 开始
 
 ## 为什么是 QitOS
 
@@ -85,9 +85,9 @@ class DemoAgent(AgentModule[DemoState, dict[str, Any], Action]):
 
 完整的 coding agent 与 SWE walkthrough 请看：
 
-- [10 分钟搭一个 Agent](https://qitor.github.io/qitos/zh/getting-started/build_agent_in_10_minutes/)
-- [Coding Agent Walkthrough](https://qitor.github.io/qitos/tutorials/examples/real_coding/)
-- [SWE Agent Walkthrough](https://qitor.github.io/qitos/tutorials/examples/real_swe/)
+- [10 分钟搭一个 Agent](https://qitor.mintlify.app/zh/getting-started/build_agent_in_10_minutes/)
+- [Coding Agent Walkthrough](https://qitor.mintlify.app/tutorials/examples/real_coding/)
+- [SWE Agent Walkthrough](https://qitor.mintlify.app/tutorials/examples/real_swe/)
 
 ## 示例总览
 
@@ -120,15 +120,15 @@ canonical examples 目录：
 
 ## 文档地图
 
-- 第一次接触： [Start Here](https://qitor.github.io/qitos/zh/start-here/)
-- 第一条成功路径： [快速上手](https://qitor.github.io/qitos/zh/getting-started/)
-- 写自己的 agent： [10 分钟搭一个 Agent](https://qitor.github.io/qitos/zh/getting-started/build_agent_in_10_minutes/)
-- 理解运行时： [Kernel](https://qitor.github.io/qitos/zh/research/kernel/)
-- 理解框架契约： [Contracts & Guarantees](https://qitor.github.io/qitos/zh/reference/contracts/)
-- 看典型场景： [Use Cases](https://qitor.github.io/qitos/zh/use-cases/)
-- 看 walkthrough： [Example Walkthroughs](https://qitor.github.io/qitos/tutorials/examples/)
-- 看 benchmark： [GAIA](https://qitor.github.io/qitos/zh/builder/benchmark_gaia/) / [Tau-Bench](https://qitor.github.io/qitos/zh/builder/benchmark_tau/)
-- 看 API： [API 参考](https://qitor.github.io/qitos/zh/reference/api_generated/)
+- 第一次接触： [Start Here](https://qitor.mintlify.app/zh/start-here/)
+- 第一条成功路径： [快速上手](https://qitor.mintlify.app/zh/getting-started/)
+- 写自己的 agent： [10 分钟搭一个 Agent](https://qitor.mintlify.app/zh/getting-started/build_agent_in_10_minutes/)
+- 理解运行时： [Kernel](https://qitor.mintlify.app/zh/research/kernel/)
+- 理解框架契约： [Contracts & Guarantees](https://qitor.mintlify.app/zh/reference/contracts/)
+- 看典型场景： [Use Cases](https://qitor.mintlify.app/zh/use-cases/)
+- 看 walkthrough： [Example Walkthroughs](https://qitor.mintlify.app/tutorials/examples/)
+- 看 benchmark： [GAIA](https://qitor.mintlify.app/zh/builder/benchmark_gaia/) / [Tau-Bench](https://qitor.mintlify.app/zh/builder/benchmark_tau/)
+- 看 API： [API 参考](https://qitor.mintlify.app/zh/reference/api_generated/)
 
 ## 界面预览
 
@@ -171,7 +171,7 @@ QitOS 当前处于 **Alpha**。
 - 普通用户安装：`pip install qitos`
 - 仓库快速安装：`pip install -r requirements.txt`
 - 完整开发安装：`pip install -r requirements-dev.txt`
-- 安装说明： [Installation](https://qitor.github.io/qitos/zh/getting-started/installation/)
+- 安装说明： [Installation](https://qitor.mintlify.app/zh/getting-started/installation/)
 
 ## 参与贡献
 
