@@ -1,0 +1,34 @@
+---
+title: "QitOS Blog"
+description: "Design notes, field reports, and practical lessons from building agents with QitOS."
+---
+
+The QitOS Blog is where we write about how the framework is actually used in research and real agent workflows.
+
+The docs explain **what** QitOS does. The blog is where we explain:
+
+- why certain design decisions were made
+- what worked in real runs
+- what failed in benchmarks and long-running agents
+- how prompt, parser, tools, memory, and observability interact in practice
+
+## What we want to publish here
+
+We expect the blog to grow around a few recurring themes:
+
+- **Design notes**: why the framework is structured the way it is
+- **Field reports**: what we learned from long-running coding and audit agents
+- **Benchmark reports**: GAIA, Tau-Bench, and CyBench observations
+- **Prompting and parsing**: model harness choices and protocol tradeoffs
+- **Observability**: how `qita` turns traces into research artifacts
+
+## Start here
+
+<CardGroup cols={2}>
+  <Card title="Why QitOS keeps a single kernel" icon="cpu" href="/blog/single-kernel">
+    A short design note on the AgentModule + Engine split and why we avoid hidden second runtimes.
+  </Card>
+  <Card title="Tutorial track" icon="graduation-cap" href="/tutorials">
+    If you want the hands-on learning path first, start with the four-lesson tutorial course.
+  </Card>
+</CardGroup>

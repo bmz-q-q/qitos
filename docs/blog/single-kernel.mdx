@@ -1,0 +1,63 @@
+---
+title: "Why QitOS Keeps a Single Kernel"
+description: "Why examples, benchmarks, and production-style agents in QitOS all run on the same AgentModule + Engine kernel."
+---
+
+One of the strongest QitOS opinions is also one of the simplest:
+
+**a run should have one execution kernel.**
+
+In practice, that means:
+
+- `AgentModule` defines policy
+- `Engine` owns execution
+- parsers, toolsets, critics, memory, and tracing attach to that runtime
+
+We deliberately avoid introducing a hidden second loop for planning, benchmarking, or domain-specific workflows.
+
+## Why this matters
+
+When frameworks introduce multiple implicit runtimes, three things usually happen:
+
+1. examples become hard to compare with production agents
+2. benchmark logic drifts away from day-to-day agent logic
+3. traces stop telling a coherent story
+
+QitOS tries to avoid all three.
+
+If a benchmark run, a Claude Code-style agent, and a security audit agent all use the same kernel, then:
+
+- traces remain comparable
+- debugging techniques transfer
+- prompt and parser experiments are easier to reason about
+- long-running behavior stays inspectable instead of turning into framework glue
+
+## Where specialization belongs
+
+QitOS does support specialization, but it wants specialization to live in the right places:
+
+- state design
+- prompt policy
+- parser and protocol choice
+- tool composition
+- `reduce()` semantics
+
+This is why a domain-specific audit agent can still be an ordinary QitOS agent.
+
+## What this means for users
+
+If you're building on QitOS, the default question should not be:
+
+> Do I need a second orchestrator?
+
+It should usually be:
+
+> Can I express this through state, prompt, parser, tools, history, or memory on top of the same kernel?
+
+That constraint makes the system easier to learn, easier to test, and easier to reproduce.
+
+## Continue reading
+
+- [Introduction](/introduction)
+- [Engine](/concepts/engine)
+- [Tutorials](/tutorials)

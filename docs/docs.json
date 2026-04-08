@@ -18,122 +18,178 @@
       {
         "language": "en",
         "default": true,
-        "groups": [
+        "tabs": [
           {
-            "group": "Get Started",
-            "pages": [
-              "introduction",
-              "quickstart",
-              "installation"
+            "tab": "Getting Started",
+            "icon": "rocket",
+            "groups": [
+              {
+                "group": "Get Started",
+                "pages": [
+                  "introduction",
+                  "prerequisites",
+                  "quickstart",
+                  "installation"
+                ]
+              },
+              {
+                "group": "Tutorials",
+                "root": "tutorials/index",
+                "pages": [
+                  "tutorials/index",
+                  "tutorials/react",
+                  "tutorials/planact",
+                  "tutorials/claude-code",
+                  "tutorials/code-security-audit"
+                ]
+              }
             ]
           },
           {
-            "group": "Core Concepts",
-            "pages": [
-              "concepts/agent-module",
-              "concepts/engine",
-              "concepts/state-and-task",
-              "concepts/tools-and-registry",
-              "concepts/tracing"
+            "tab": "Docs",
+            "icon": "book-open",
+            "groups": [
+              {
+                "group": "Core Concepts",
+                "pages": [
+                  "concepts/agent-module",
+                  "concepts/engine",
+                  "concepts/state-and-task",
+                  "concepts/tools-and-registry",
+                  "concepts/tracing"
+                ]
+              },
+              {
+                "group": "Guides",
+                "pages": [
+                  "guides/build-your-first-agent",
+                  "guides/agent-patterns",
+                  "guides/memory-and-history",
+                  "guides/critics-and-stop-criteria",
+                  "guides/observability"
+                ]
+              },
+              {
+                "group": "Benchmarks",
+                "pages": [
+                  "benchmarks/overview",
+                  "benchmarks/gaia",
+                  "benchmarks/tau-bench",
+                  "benchmarks/cybench"
+                ]
+              },
+              {
+                "group": "Reference",
+                "pages": [
+                  "reference/api",
+                  "reference/kit",
+                  "reference/cli",
+                  "reference/configuration"
+                ]
+              }
             ]
           },
           {
-            "group": "Guides",
-            "pages": [
-              "guides/build-your-first-agent",
-              "guides/agent-patterns",
-              "guides/memory-and-history",
-              "guides/critics-and-stop-criteria",
-              "guides/observability"
-            ]
-          },
-          {
-            "group": "Tutorials",
-            "pages": [
-              "tutorials/index",
-              "tutorials/react",
-              "tutorials/planact",
-              "tutorials/claude-code",
-              "tutorials/code-security-audit"
-            ]
-          },
-          {
-            "group": "Benchmarks",
-            "pages": [
-              "benchmarks/overview",
-              "benchmarks/gaia",
-              "benchmarks/tau-bench",
-              "benchmarks/cybench"
-            ]
-          },
-          {
-            "group": "Reference",
-            "pages": [
-              "reference/api",
-              "reference/kit",
-              "reference/cli",
-              "reference/configuration"
+            "tab": "Blog",
+            "icon": "newspaper",
+            "groups": [
+              {
+                "group": "QitOS Blog",
+                "root": "blog/index",
+                "pages": [
+                  "blog/index",
+                  "blog/single-kernel"
+                ]
+              }
             ]
           }
         ]
       },
       {
         "language": "zh",
-        "groups": [
+        "tabs": [
           {
-            "group": "开始使用",
-            "pages": [
-              "zh/introduction",
-              "zh/quickstart",
-              "zh/installation"
+            "tab": "开始使用",
+            "icon": "rocket",
+            "groups": [
+              {
+                "group": "开始使用",
+                "pages": [
+                  "zh/introduction",
+                  "zh/prerequisites",
+                  "zh/quickstart",
+                  "zh/installation"
+                ]
+              },
+              {
+                "group": "教程",
+                "root": "zh/tutorials/index",
+                "pages": [
+                  "zh/tutorials/index",
+                  "zh/tutorials/react",
+                  "zh/tutorials/planact",
+                  "zh/tutorials/claude-code",
+                  "zh/tutorials/code-security-audit"
+                ]
+              }
             ]
           },
           {
-            "group": "核心概念",
-            "pages": [
-              "zh/concepts/agent-module",
-              "zh/concepts/engine",
-              "zh/concepts/state-and-task",
-              "zh/concepts/tools-and-registry",
-              "zh/concepts/tracing"
+            "tab": "文档",
+            "icon": "book-open",
+            "groups": [
+              {
+                "group": "核心概念",
+                "pages": [
+                  "zh/concepts/agent-module",
+                  "zh/concepts/engine",
+                  "zh/concepts/state-and-task",
+                  "zh/concepts/tools-and-registry",
+                  "zh/concepts/tracing"
+                ]
+              },
+              {
+                "group": "指南",
+                "pages": [
+                  "zh/guides/build-your-first-agent",
+                  "zh/guides/agent-patterns",
+                  "zh/guides/memory-and-history",
+                  "zh/guides/critics-and-stop-criteria",
+                  "zh/guides/observability"
+                ]
+              },
+              {
+                "group": "基准测试",
+                "pages": [
+                  "zh/benchmarks/overview",
+                  "zh/benchmarks/gaia",
+                  "zh/benchmarks/tau-bench",
+                  "zh/benchmarks/cybench"
+                ]
+              },
+              {
+                "group": "参考",
+                "pages": [
+                  "zh/reference/api",
+                  "zh/reference/kit",
+                  "zh/reference/cli",
+                  "zh/reference/configuration"
+                ]
+              }
             ]
           },
           {
-            "group": "指南",
-            "pages": [
-              "zh/guides/build-your-first-agent",
-              "zh/guides/agent-patterns",
-              "zh/guides/memory-and-history",
-              "zh/guides/critics-and-stop-criteria",
-              "zh/guides/observability"
-            ]
-          },
-          {
-            "group": "教程",
-            "pages": [
-              "zh/tutorials/index",
-              "zh/tutorials/react",
-              "zh/tutorials/planact",
-              "zh/tutorials/claude-code",
-              "zh/tutorials/code-security-audit"
-            ]
-          },
-          {
-            "group": "基准测试",
-            "pages": [
-              "zh/benchmarks/overview",
-              "zh/benchmarks/gaia",
-              "zh/benchmarks/tau-bench",
-              "zh/benchmarks/cybench"
-            ]
-          },
-          {
-            "group": "参考",
-            "pages": [
-              "zh/reference/api",
-              "zh/reference/kit",
-              "zh/reference/cli",
-              "zh/reference/configuration"
+            "tab": "博客",
+            "icon": "newspaper",
+            "groups": [
+              {
+                "group": "QitOS 博客",
+                "root": "zh/blog/index",
+                "pages": [
+                  "zh/blog/index",
+                  "zh/blog/single-kernel"
+                ]
+              }
             ]
           }
         ]
