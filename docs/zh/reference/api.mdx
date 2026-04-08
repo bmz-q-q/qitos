@@ -1,0 +1,238 @@
+---
+title: "API 参考"
+description: "QitOS 公开 Python API 的完整参考。这里列出的符号都从 `qitos` 顶层导出。"
+---
+
+本页列出的符号都可以直接这样导入：
+
+```python
+from qitos import AgentModule, Engine, Decision, ...
+```
+
+---
+
+<AccordionGroup>
+
+<Accordion title="AgentModule">
+
+`AgentModule` 是 QitOS 的策略层。你通过继承它来定义 agent 的 state 形状、system prompt、decision logic 与 reduction rules；真正的执行循环由 `Engine` 驱动。
+
+```python
+class AgentModule(ABC, Generic[StateT, ObservationT, ActionT])
+```
+
+**构造函数**
+
+```python
+def __init__(
+    self,
+    tool_registry: Any = None,
+    llm: Any = None,
+    model_parser: Any = None,
+    memory: Memory | None = None,
+    history: History | None = None,
+    **config: Any,
+)
+```
+
+| 参数 | 类型 | 说明 |
+|---|---|---|
+| `tool_registry` | `ToolRegistry \| None` | agent 可调用的工具注册表 |
+| `llm` | `Any` | 用于默认模型决策路径的 LLM callable |
+| `model_parser` | `Any` | 把原始模型输出解析成 `Decision` 的 parser |
+| `memory` | `Memory \| None` | 可选 memory adapter |
+| `history` | `History \| None` | 可选 history adapter |
+| `**config` | `Any` | 额外关键字参数，保存在 `self.config` |
+
+**Hooks**
+
+只要求实现 `init_state` 与 `reduce`；其余 hooks 全部可选。
+
+<AccordionGroup>
+<Accordion title="init_state（必需）">
+
+```python
+def init_state(self, task: str, **kwargs: Any) -> StateT
+```
+
+创建并返回本次 run 的初始 state。
+
+</Accordion>
+
+<Accordion title="reduce（必需）">
+
+```python
+def reduce(
+    self,
+    state: StateT,
+    observation: ObservationT,
+    decision: Decision[ActionT],
+) -> StateT
+```
+
+把当前 observation 与 decision 折叠进下一步 state。
+
+</Accordion>
+
+<Accordion title="build_system_prompt">
+
+```python
+def build_system_prompt(self, state: StateT) -> str | None
+```
+
+返回动态 system prompt；默认返回 `None`。
+
+</Accordion>
+
+<Accordion title="prepare">
+
+```python
+def prepare(self, state: StateT) -> str
+```
+
+把 state 转成模型输入文本；默认是 `str(state)`。
+
+</Accordion>
+
+<Accordion title="decide">
+
+```python
+def decide(
+    self,
+    state: StateT,
+    observation: ObservationT,
+) -> Decision[ActionT] | None
+```
+
+自定义决策 hook。返回 `Decision` 时跳过默认模型调用；返回 `None` 时继续走 Engine 的模型路径。
+
+</Accordion>
+
+<Accordion title="should_stop">
+
+```python
+def should_stop(self, state: StateT) -> bool
+```
+
+额外停止条件；默认返回 `False`。
+
+</Accordion>
+</AccordionGroup>
+
+**`.run()` 方法**
+
+```python
+def run(
+    self,
+    task: str | Task,
+    return_state: bool = False,
+    hooks: List[Any] | None = None,
+    render_hooks: List[Any] | None = None,
+    engine_kwargs: Dict[str, Any] | None = None,
+    workspace: str | None = None,
+    max_steps: int | None = None,
+    env: Any = None,
+    parser: Any = None,
+    search: Any = None,
+    critics: List[Any] | None = None,
+    stop_criteria: List[Any] | None = None,
+    history_policy: Any = None,
+    trace: Any = None,
+    render: Any = None,
+    trace_logdir: str = "./runs",
+    trace_prefix: str | None = None,
+    theme: str = "research",
+    **state_kwargs: Any,
+) -> Any
+```
+
+这是最常用入口。它会构建 `Engine`、执行任务，并默认返回 `state.final_result`；当 `return_state=True` 时，返回完整 `EngineResult`。
+
+</Accordion>
+
+<Accordion title="Engine">
+
+`Engine` 是执行内核，负责 phase loop、工具执行、recovery、tracing 与 stop criteria 评估。
+
+```python
+class Engine(Generic[StateT, ObservationT, ActionT])
+```
+
+核心构造参数包括：
+
+- `agent`
+- `budget`
+- `parser`
+- `stop_criteria`
+- `critics`
+- `env`
+- `history_policy`
+- `trace_writer`
+- `hooks`
+
+最常用方法：
+
+```python
+def run(self, task: str | Task, **kwargs: Any) -> EngineResult[StateT]
+```
+
+</Accordion>
+
+<Accordion title="EngineResult">
+
+```python
+@dataclass
+class EngineResult(Generic[StateT]):
+    state: StateT
+    records: List[StepRecord]
+    events: List[RuntimeEvent]
+    step_count: int
+    task_result: Optional[TaskResult] = None
+```
+
+其中：
+
+- `state`：最终强类型 state
+- `records`：每步 `StepRecord`
+- `events`：所有 runtime events
+- `step_count`：执行步数
+- `task_result`：结构化任务结果
+
+</Accordion>
+
+<Accordion title="Decision">
+
+`Decision` 是 decide phase 的规范输出。推荐用工厂方法构造：
+
+```python
+Decision.act(...)
+Decision.final(...)
+Decision.wait(...)
+Decision.branch(...)
+```
+
+四种 mode 分别对应：
+
+- `"act"`：执行动作
+- `"final"`：给出最终答案并结束
+- `"wait"`：本步不执行动作
+- `"branch"`：提出多个候选决策
+
+</Accordion>
+
+<Accordion title="Task / State / Action">
+
+常用基础数据结构包括：
+
+- `StateSchema`
+- `Task`
+- `TaskBudget`
+- `TaskResource`
+- `Action`
+- `StopReason`
+
+它们共同定义了一次 run 的输入、状态与输出语义。
+
+</Accordion>
+
+</AccordionGroup>

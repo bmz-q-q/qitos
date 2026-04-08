@@ -1,0 +1,151 @@
+---
+title: "简介"
+description: "QitOS 是一个以研究为先的 agent 框架，用清晰的 AgentModule + Engine 内核构建可复现的 LLM agents。"
+---
+
+QitOS 提供了一套稳定的 `AgentModule + Engine` 内核，用于构建可复现的 LLM agent。无论你是在原型化 ReAct 循环、运行 GAIA 基准，还是交付一个面向真实工作流的编码 agent，QitOS 都会让运行结果保持可追踪、可组合、可复现。
+
+一个长时间运行的 QitOS coding run，不应该退化成难以理解的胶水代码。
+
+![QitOS 实时 coding run](/images/demo.gif)
+
+## QitOS 适合谁
+
+QitOS 主要面向三类实践者：
+
+- **研究者**：原型化 ReAct、PlanAct、Tree-of-Thought、Reflexion 与新的 agent 方法，并获得可 replay、可对比、可发表的运行记录。
+- **Agent 构建者**：在稳定执行循环上构建 tool-using agents，而不是反复手写围绕裸 LLM 调用的框架胶水。
+- **评测者**：在和产品 agent 相同的内核上运行 GAIA、Tau-Bench 与 CyBench，让 benchmark 结果真正能够迁移。
+
+## 核心能力
+
+### 可复现的运行
+
+每次 QitOS 运行都会产出 `manifest.json`、`events.jsonl` 和 `steps.jsonl`。这些文件会记录模型 ID、prompt hash、config hash、seed、tool manifest 等关键信息，足以让你精确复现或比较两次运行。
+
+### 内置可观测性：qita
+
+`qita` 是 QitOS 自带的 trace viewer。任意一次运行结束后，你都可以启动 board 来查看逐步执行、重放轨迹，并导出成独立 HTML。
+
+```bash
+qita board --logdir runs
+```
+
+board 默认运行在 `http://127.0.0.1:8765`，当新的 run 出现时会自动刷新。
+
+### 规范化的 agent 模式
+
+QitOS 内置四种经典 reasoning pattern，对应的可运行示例位于 `examples/patterns/`：
+
+| 模式 | 说明 |
+|---|---|
+| **ReAct** | 文本协议，每步至多执行一个核心动作 |
+| **PlanAct** | 先生成显式计划，再按步骤执行 |
+| **Tree-of-Thought** | 先分支、评分，再决定执行路径 |
+| **Reflexion** | Actor-Critic 循环，带基于证据的重试 |
+
+### 基准测试适配器
+
+QitOS 提供 GAIA、Tau-Bench 与 CyBench 适配器，它们都运行在与你自定义 agent 相同的 `AgentModule + Engine` 内核上，不需要另一套独立评测框架。
+
+## 特色设计
+
+这些设计决定了 QitOS 不只是“agent 工具集合”，而是一套清晰的运行时方法论。
+
+### 单内核架构
+
+QitOS 最核心的约束只有一条：一次 run 只有一个 runtime kernel。
+
+- `AgentModule` 定义策略
+- `Engine` 负责执行
+- tools、parsers、critics、memory 与 tracing 都附着在这条主链路上
+
+这让示例、benchmark 和生产型 agent 之间保持可比性。
+
+### 协议感知的 prompt 与 parser
+
+QitOS 把 prompt 格式与 parser 选择当作一等设计契约：
+
+- ReAct prompt 搭配 `ReActTextParser`
+- JSON prompt 搭配 `JsonDecisionParser`
+- XML prompt 搭配 `XmlDecisionParser`
+- Terminus、MiniMax tool-call parser 等结构化变体也仍然走同一条 `model response -> parser -> Decision` 路径
+
+正因为这层契约是显式的，trace 才不会退化成 provider-specific 的隐式胶水。
+
+### 以 preset 为优先的 agent 编写方式
+
+QitOS 提供可复用的 authoring blocks，而不是要求每个 agent 从零开始组装一切：
+
+- `coding_tools(...)`、`advanced_coding_tools(...)`、`web_tools()`、`task_tools(...)`、`security_audit_tools(...)`
+- `WindowMemory`、`SummaryMemory`、`VectorMemory`、`MarkdownFileMemory`
+- `WindowHistory`、`TokenBudgetSummaryHistory`、`CompactHistory`
+- `NumberedPlanBuilder`、`DynamicTreeSearch`
+
+研究者可以调整 policy，而不必重搭整套基础设施。
+
+### 面向长时运行的上下文控制
+
+长时运行 agent 是 QitOS 的一等公民。你可以通过这些层次控制上下文膨胀：
+
+- `HistoryPolicy` 控制消息选择
+- `TokenBudgetSummaryHistory` 做 token-budget 感知的摘要
+- `CompactHistory` 做多阶段 compaction
+- memory adapters 负责语义检索与持久记忆
+
+这也是 QitOS 的研究价值所在：框架帮助你研究长时运行，而不是假设上下文是免费的。
+
+### trace-first 的可观测性
+
+QitOS 的假设是：只要一次运行重要，它就应该可检查。
+
+每次 traced run 都会产出结构化 artifacts，而 `qita` 会把它们变成：
+
+- 用于比较多次实验的 board
+- 用于逐步理解单次运行的 replay
+- 用于分享与审计的 export
+
+### 不引入新 runtime 的领域专门化
+
+QitOS 一个很强的设计点是：领域 agent 仍然是普通的 QitOS agent。
+
+Claude Code 风格 agent、benchmark runners、代码安全审计 agent 都复用了同一个 runtime。领域行为体现在：
+
+- state 设计
+- prompt policy
+- tool composition
+- `reduce()` 语义
+
+因此专门化既更容易理解，也更容易复现。
+
+## 当前状态
+
+<Warning>
+QitOS 当前处于 **Alpha** 阶段。稳定的基础主要是 `AgentModule + Engine` 内核、`qita` trace/observability 流程、规范化示例以及 benchmark adapters。更高层的 convenience APIs、部分 `kit` 模块和实验性 toolsets 仍可能持续演进。若你正在评估采用路径，建议从内核与 examples 入手，而不是假设所有表面都已经冻结。
+</Warning>
+
+## 接下来读什么
+
+<CardGroup cols={2}>
+  <Card title="快速开始" icon="rocket" href="/zh/quickstart">
+    2 分钟内运行第一个 agent
+  </Card>
+  <Card title="教程课程" icon="graduation-cap" href="/zh/tutorials">
+    通过四节课程理解 QitOS 的 agent 设计方法
+  </Card>
+  <Card title="安装" icon="download" href="/zh/installation">
+    安装 QitOS 及其可选 extras
+  </Card>
+  <Card title="核心概念" icon="book" href="/zh/concepts/agent-module">
+    理解 AgentModule、Engine、State 与 Tools
+  </Card>
+  <Card title="Agent 模式" icon="diagram-project" href="/zh/guides/agent-patterns">
+    查看 ReAct、PlanAct、ToT 与 Reflexion 的模式地图
+  </Card>
+  <Card title="Kit 参考" icon="toolbox" href="/zh/reference/kit">
+    浏览内置 parsers、toolsets、memory、planning 与 history 策略
+  </Card>
+  <Card title="Tracing 与 qita" icon="chart-line" href="/zh/guides/observability">
+    了解 QitOS 如何让每次运行都可检查、可 replay、可导出
+  </Card>
+</CardGroup>

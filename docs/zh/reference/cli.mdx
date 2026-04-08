@@ -1,0 +1,115 @@
+---
+title: "CLI 参考"
+description: "QitOS 的命令行工具参考：`qita`（trace 与 observability）以及 `qit`（开发者工具）。"
+---
+
+QitOS 提供两个 CLI：
+
+- **`qita`**：trace 检查、web board、replay 与 HTML export
+- **`qit`**：开发者工具，目前主要用于第三方 skills 管理
+
+如果你关心复现、调试或审阅长时运行行为，`qita` 是更重要的 CLI，它是 trace artifacts 的人类检查层。
+
+## qita
+
+```bash
+qita <command> [options]
+```
+
+你会在这些场景使用 `qita`：
+
+- prompt、tools 或 model 改完之后比较多次 runs
+- 逐步检查一个长时运行轨迹
+- 回放一次 run 进行调试或演示
+- 把一次 run 导出成可分享的审阅 artifact
+
+<AccordionGroup>
+<Accordion title="qita board">
+
+启动 web board，展示一个 logdir 下的所有 runs。
+
+```bash
+qita board [--logdir <dir>] [--host <host>] [--port <port>]
+```
+
+常用参数：
+
+- `--logdir`：默认 `./runs`
+- `--host`：默认 `127.0.0.1`
+- `--port`：默认 `8765`
+
+board 会展示 stop reason、step count、event count、model ID、prompt hash 等关键元数据，并支持 view、replay 与 export。
+
+</Accordion>
+
+<Accordion title="qita replay">
+
+直接把一个 run 打开为回放视图：
+
+```bash
+qita replay --run <dir> [--host <host>] [--port <port>]
+```
+
+适合逐步理解 agent 在时间轴上的行为。
+
+</Accordion>
+
+<Accordion title="qita export">
+
+把一个 run 导出成独立 HTML：
+
+```bash
+qita export --run <dir> --html <output>
+```
+
+导出文件会内联全部数据与前端资源，适合分享给团队或审稿人。
+
+</Accordion>
+</AccordionGroup>
+
+## qit
+
+```bash
+qit <command> [options]
+```
+
+当前主要子命令是：
+
+### `qit skill`
+
+管理第三方 skills：
+
+```bash
+qit skill <subcommand> [options]
+```
+
+例如：
+
+```bash
+qit skill list
+qit skill install my-skill-package
+```
+
+## Trace 目录结构
+
+所有启用 `TraceWriter` 的 run 默认都会在 `<trace_logdir>/<run_id>/` 下产出：
+
+```text
+runs/
+└── agent_20260407_120000_abcdef/
+    ├── manifest.json
+    ├── events.jsonl
+    └── steps.jsonl
+```
+
+`qita board` 与 `qita replay` 都依赖这三份文件。
+
+## 推荐工作流
+
+最常见的研究与调试流程通常是：
+
+1. 跑 agent，并保留 trace。
+2. 打开 `qita board --logdir runs`。
+3. 比较不同 runs 的 stop reasons、steps 和 summaries。
+4. 打开最值得看的 run，用 detail 或 replay 逐步分析。
+5. 需要分享时导出 HTML。

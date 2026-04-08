@@ -1,0 +1,144 @@
+---
+title: "配置"
+description: "QitOS 的配置入口总览：`AgentModule.run()` 参数、`Engine` 构造参数、tracing 控制与环境变量。"
+---
+
+QitOS 的配置主要分三层：
+
+1. **`AgentModule.run()` 关键字参数**：最常见、最推荐的 per-run 配置入口
+2. **`Engine` 构造函数参数**：更底层的 runtime 控制
+3. **环境变量**：provider 凭证与模型默认值
+
+## AgentModule.run() 参数
+
+这些参数都可以直接传给 `agent.run(task, ...)`：
+
+<AccordionGroup>
+<Accordion title="任务与执行">
+
+- `task`：`str | Task`
+- `max_steps`
+- `return_state`
+- `workspace`
+- `env`
+
+</Accordion>
+
+<Accordion title="解析与决策">
+
+- `parser`
+- `search`
+- `critics`
+- `stop_criteria`
+- `history_policy`
+
+</Accordion>
+
+<Accordion title="Tracing 与 Rendering">
+
+- `trace`
+- `trace_logdir`
+- `trace_prefix`
+- `render`
+- `theme`
+
+</Accordion>
+
+<Accordion title="Hooks 与 Engine 透传">
+
+- `hooks`
+- `render_hooks`
+- `engine_kwargs`
+- `**state_kwargs`
+
+</Accordion>
+</AccordionGroup>
+
+一个典型例子：
+
+```python
+result = agent.run(
+    task="Analyse the repository and list all public API functions.",
+    workspace="/path/to/repo",
+    max_steps=20,
+    trace_logdir="./experiment-runs",
+    trace_prefix="api-analysis",
+)
+```
+
+## Engine 构造参数
+
+当你直接构造 `Engine` 时，最常用的参数包括：
+
+- `agent`
+- `budget`
+- `validation_gate`
+- `recovery_handler`
+- `recovery_policy`
+- `trace_writer`
+- `parser`
+- `stop_criteria`
+- `branch_selector`
+- `search`
+- `critics`
+- `env`
+- `history_policy`
+- `hooks`
+
+`RuntimeBudget` 的常见字段：
+
+```python
+@dataclass
+class RuntimeBudget:
+    max_steps: int = 10
+    max_runtime_seconds: Optional[float] = None
+    max_tokens: Optional[int] = None
+```
+
+## 环境变量
+
+常见环境变量包括：
+
+| 变量 | 用途 |
+|---|---|
+| `OPENAI_API_KEY` | OpenAI / OpenAI-compatible API key |
+| `OPENAI_BASE_URL` | OpenAI-compatible endpoint base URL |
+| `QITOS_API_KEY` | `ModelFactory.from_env()` 可识别的备用 key |
+| `QITOS_MODEL` | 默认模型 ID |
+| `AZURE_OPENAI_API_KEY` | Azure OpenAI key |
+| `AZURE_OPENAI_ENDPOINT` | Azure OpenAI endpoint |
+| `AZURE_OPENAI_DEPLOYMENT` | Azure deployment 名称 |
+| `AZURE_OPENAI_API_VERSION` | Azure API version |
+
+示例：
+
+```bash
+OPENAI_API_KEY=sk-...
+OPENAI_BASE_URL=https://api.siliconflow.cn/v1/
+```
+
+## Trace 输出目录
+
+默认情况下，`AgentModule.run()` 会把 trace 写到 `./runs/`：
+
+```text
+<trace_logdir>/
+└── <trace_prefix>_<YYYYMMDD_HHMMSS_ffffff>/
+    ├── manifest.json
+    ├── events.jsonl
+    └── steps.jsonl
+```
+
+你可以通过 `trace_prefix` 覆盖自动生成的前缀：
+
+```python
+agent.run(task="...", trace_prefix="experiment-01")
+```
+
+然后用：
+
+```bash
+qita board --logdir ./runs
+```
+
+来查看这些结果。

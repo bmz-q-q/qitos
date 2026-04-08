@@ -1,0 +1,219 @@
+---
+title: "构建第一个 Agent"
+description: "从零开始构建一个可运行的 QitOS agent：state、tools、run 与 trace inspection。"
+---
+
+每个 QitOS agent 都遵循同一条执行路径：`AgentModule + Engine + Trace`。你负责定义策略，Engine 负责执行循环。本页会用 `examples/quickstart/minimal_agent.py` 里的最小计算器示例，带你把这条主链路从头走一遍。
+
+## 前置条件
+
+- Python 3.10+
+- 任意 OpenAI-compatible endpoint 的 API key
+
+<Steps>
+
+<Step title="安装 qitos">
+
+可以从源码根目录以开发模式安装，也可以直接从 PyPI 安装：
+
+```bash
+pip install qitos
+pip install "qitos[models]"
+```
+
+如果你准备接入 LLM，请先导出 API key：
+
+```bash
+export OPENAI_API_KEY="sk-..."
+export OPENAI_BASE_URL="https://api.siliconflow.cn/v1/"
+```
+
+</Step>
+
+<Step title="定义 state">
+
+每个 agent 都有一个贯穿全程的强类型 state。继承 `StateSchema`，再补上你自己的字段：
+
+```python
+from dataclasses import dataclass
+from qitos import StateSchema
+
+@dataclass
+class CalcState(StateSchema):
+    pass
+```
+
+`StateSchema` 已经自带这些字段：
+
+| 字段 | 类型 | 用途 |
+|---|---|---|
+| `task` | `str` | 传给 `run()` 的任务文本 |
+| `current_step` | `int` | Engine 维护的步数计数器 |
+| `max_steps` | `int` | 预算上限 |
+| `final_result` | `str \| None` | 设置后会停止 run 并返回结果 |
+| `stop_reason` | `str \| None` | Engine 在退出时写入停止原因 |
+
+<Tip>
+把 scratchpad、partial plans、fetched content 等领域字段直接加成 dataclass 字段即可。保持可序列化，这样 Engine 才能在 trace 中记录 state。
+</Tip>
+
+</Step>
+
+<Step title="实现 init_state 与 reduce">
+
+`init_state` 负责创建起始状态；`reduce` 负责把每步执行结果折叠回 state：
+
+```python
+from typing import Any
+from qitos import Action, AgentModule, Decision, StateSchema
+
+@dataclass
+class CalcState(StateSchema):
+    pass
+
+class MinimalAgent(AgentModule[CalcState, dict[str, Any], Action]):
+
+    def init_state(self, task: str, **kwargs: Any) -> CalcState:
+        return CalcState(task=task, max_steps=int(kwargs.get("max_steps", 2)))
+
+    def reduce(
+        self,
+        state: CalcState,
+        observation: dict[str, Any],
+        decision: Decision[Action],
+    ) -> CalcState:
+        action_results = observation.get("action_results", [])
+        if action_results:
+            state.final_result = str(action_results[0])
+        return state
+```
+
+<Warning>
+  `reduce` 必须返回 `state`。这是最常见错误之一；漏掉返回值会触发 Engine 校验错误。
+</Warning>
+
+</Step>
+
+<Step title="添加 tools">
+
+使用 `@tool` 装饰器定义工具，并注册到 `ToolRegistry`：
+
+```python
+from qitos import Action, AgentModule, Decision, StateSchema, ToolRegistry, tool
+
+class MinimalAgent(AgentModule[CalcState, dict[str, Any], Action]):
+    def __init__(self):
+        registry = ToolRegistry()
+
+        @tool(name="add")
+        def add(a: int, b: int) -> int:
+            return a + b
+
+        registry.register(add)
+        super().__init__(tool_registry=registry)
+```
+
+这个最小示例不需要 LLM，因此它直接覆写 `decide()` 返回硬编码 `Decision`：
+
+```python
+    def decide(
+        self,
+        state: CalcState,
+        observation: dict[str, Any],
+    ) -> Decision[Action]:
+        if state.current_step == 0:
+            return Decision.act(
+                [Action(name="add", args={"a": 40, "b": 2})],
+                rationale="compute_answer",
+            )
+        return Decision.final("42")
+```
+
+`Decision` 有四种规范模式：
+
+| 模式 | 工厂方法 | 用途 |
+|---|---|---|
+| `act` | `Decision.act(actions, rationale)` | 执行一个或多个工具 |
+| `final` | `Decision.final(answer)` | 产出结果并结束 |
+| `wait` | `Decision.wait(rationale)` | 本步跳过工具执行 |
+| `branch` | `Decision.branch(candidates)` | Tree-of-Thought 风格分支 |
+
+</Step>
+
+<Step title="运行 agent">
+
+调用 `agent.run()` 时，通常至少会传 `task`、`workspace` 和 `max_steps`：
+
+```python
+from pathlib import Path
+
+WORKSPACE = Path("./playground/minimal_agent")
+
+def main() -> None:
+    WORKSPACE.mkdir(parents=True, exist_ok=True)
+    agent = MinimalAgent()
+    result = agent.run(
+        task="compute 40 + 2",
+        workspace=str(WORKSPACE),
+        max_steps=2,
+        return_state=True,
+    )
+    print("final_result:", result.state.final_result)
+    print("stop_reason:", result.state.stop_reason)
+```
+
+当 `return_state=True` 时，`run()` 会返回 `EngineResult`，其中包含：
+
+- `result.state`：最终 state
+- `result.records`：每步 `StepRecord`
+- `result.step_count`：总步数
+
+如果不传 `return_state=True`，则默认直接返回 `result.state.final_result`。
+
+<Tip>
+  trace 默认会自动写到 `./runs/<run_id>/`。如需更换目录，可传 `trace_logdir="./my_runs"`。
+</Tip>
+
+</Step>
+
+<Step title="用 qita board 检查运行">
+
+运行结束后，用 Web board 查看 trace：
+
+```bash
+qita board --logdir ./runs
+```
+
+board 默认启动在 `http://127.0.0.1:8765`。你可以从 run cards 打开 trace view、step navigator 和 timeline。
+
+```bash
+qita board --logdir ./runs --host 0.0.0.0 --port 9000
+```
+
+针对单次 run：
+
+```bash
+qita replay --run <run_dir>
+qita export --run <run_dir> --html out.html
+```
+
+</Step>
+
+</Steps>
+
+## 完整示例
+
+完整代码请查看：
+
+- [`examples/quickstart/minimal_agent.py`](https://github.com/Qitor/qitos/blob/main/examples/quickstart/minimal_agent.py)
+
+## 下一步建议
+
+<CardGroup cols={2}>
+  <Card title="教程课程" icon="graduation-cap" href="/zh/tutorials">
+    沿着 ReAct、PlanAct、Claude Code 风格与安全审计路线继续学习
+  </Card>
+  <Card title="Kit 参考" icon="toolbox" href="/zh/reference/kit">
+    查看 parsers、toolsets、memory 与 planning helpers
+  </Card>
+</CardGroup>

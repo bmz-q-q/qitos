@@ -1,0 +1,162 @@
+---
+title: "快速开始"
+description: "在 2 分钟内运行你的第一个 QitOS agent。"
+---
+
+本页会带你从一个空环境走到可运行的 agent，再到可视化 trace，全程控制在 2 分钟左右。
+
+这就是 QitOS runtime 实际运行时的体验：
+
+![QitOS runtime 快照](/images/qitos-cli.png)
+
+## 前置条件
+
+- Python 3.9 或更高版本
+- `pip`
+- 一个 OpenAI-compatible API key
+
+## 操作步骤
+
+<Steps>
+  <Step title="安装 QitOS">
+    从 PyPI 安装。`models` extra 会加入 OpenAI client：
+
+    ```bash
+    pip install "qitos[models]"
+    ```
+
+    如果你只需要核心框架：
+
+    ```bash
+    pip install qitos
+    ```
+  </Step>
+
+  <Step title="设置 API Key">
+    把 OpenAI-compatible API key 作为环境变量导出：
+
+    ```bash
+    export OPENAI_API_KEY="sk-..."
+    ```
+
+    <Tip>
+      任意 OpenAI-compatible endpoint 都可以使用。如果你不是直接使用 OpenAI，请把 `OPENAI_BASE_URL` 指向对应 provider。
+    </Tip>
+  </Step>
+
+  <Step title="运行最小 agent">
+    最小示例展示了最小可工作的 `AgentModule + Engine` 流程。它定义了一个 `add` 工具，用两步循环计算 `40 + 2`，并把 trace 写到 `./playground/minimal_agent/`。
+
+    ```python minimal_agent.py
+    """Quickstart: smallest runnable AgentModule + Engine flow."""
+
+    from __future__ import annotations
+
+    from dataclasses import dataclass
+    from pathlib import Path
+    from typing import Any
+
+    from qitos import Action, AgentModule, Decision, StateSchema, ToolRegistry, tool
+
+    TASK = "compute 40 + 2"
+    WORKSPACE = Path("./playground/minimal_agent")
+    MAX_STEPS = 2
+
+
+    @dataclass
+    class CalcState(StateSchema):
+        pass
+
+
+    class MinimalAgent(AgentModule[CalcState, dict[str, Any], Action]):
+        def __init__(self):
+            registry = ToolRegistry()
+
+            @tool(name="add")
+            def add(a: int, b: int) -> int:
+                return a + b
+
+            registry.register(add)
+            super().__init__(tool_registry=registry)
+
+        def init_state(self, task: str, **kwargs: Any) -> CalcState:
+            return CalcState(task=task, max_steps=int(kwargs.get("max_steps", MAX_STEPS)))
+
+        def decide(self, state: CalcState, observation: dict[str, Any]) -> Decision[Action]:
+            if state.current_step == 0:
+                return Decision.act([Action(name="add", args={"a": 40, "b": 2})], rationale="compute_answer")
+            return Decision.final("42")
+
+        def reduce(self, state: CalcState, observation: dict[str, Any], decision: Decision[Action]) -> CalcState:
+            action_results = observation.get("action_results", []) if isinstance(observation, dict) else []
+            if action_results:
+                state.final_result = str(action_results[0])
+            return state
+
+
+    def main() -> None:
+        WORKSPACE.mkdir(parents=True, exist_ok=True)
+        agent = MinimalAgent()
+        result = agent.run(
+            task=TASK,
+            workspace=str(WORKSPACE),
+            max_steps=MAX_STEPS,
+            return_state=True,
+        )
+        print("workspace:", WORKSPACE)
+        print("final_result:", result.state.final_result)
+        print("stop_reason:", result.state.stop_reason)
+
+
+    if __name__ == "__main__":
+        main()
+    ```
+
+    运行它：
+
+    ```bash
+    python minimal_agent.py
+    ```
+
+    你会看到类似输出：
+
+    ```
+    workspace: playground/minimal_agent
+    final_result: 42
+    stop_reason: max_steps
+    ```
+  </Step>
+
+  <Step title="用 qita 查看运行轨迹">
+    QitOS 会为每次 run 写出完整 trace。启动 `qita` board：
+
+    ```bash
+    qita board --logdir runs
+    ```
+
+    在浏览器中打开 [http://127.0.0.1:8765](http://127.0.0.1:8765)。board 会列出 logdir 中的所有 run，包括 step 数、stop reason 和 final result。点击任意 run 的 **view** 查看逐步轨迹，或用 **replay** 做回放。
+
+    <Note>
+      最小示例的 trace 会写到 `./playground/minimal_agent/`。如果在 board 里看不到它，请把 `--logdir` 指向 `playground`。
+    </Note>
+  </Step>
+</Steps>
+
+## 接下来怎么学
+
+你已经跑起了一个 agent，也看到了它的 trace。接下来推荐继续：
+
+<CardGroup cols={2}>
+  <Card title="构建第一个 Agent" icon="code" href="/zh/guides/build-your-first-agent">
+    系统理解 AgentModule 接口
+  </Card>
+  <Card title="教程课程" icon="graduation-cap" href="/zh/tutorials">
+    通过 ReAct、PlanAct、Claude Code 风格和安全审计课程递进学习
+  </Card>
+  <Card title="可观测性" icon="chart-line" href="/zh/guides/observability">
+    全面了解 qita board、replay 与 export
+  </Card>
+  <Card title="基准测试" icon="trophy" href="/zh/benchmarks/overview">
+    在 QitOS 内核上运行 GAIA、Tau-Bench 与 CyBench
+  </Card>
+</CardGroup>

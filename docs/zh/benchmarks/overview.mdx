@@ -1,0 +1,70 @@
+---
+title: "基准测试"
+description: "在同一个 AgentModule + Engine 内核上运行 GAIA、Tau-Bench 与 CyBench，进行可复现的 agent 研究。"
+---
+
+Benchmark 是 agent 研究的地面真相。如果没有可复现的评测 harness，你很难判断模型、prompt 或 planner 的变化到底带来了真实提升，还是只是碰巧在某些样本上运气好。
+
+QitOS 为三类标准 benchmark 提供了一等适配器。它们全部运行在同一个 `AgentModule + Engine` 内核上，因此无论你是在跑 GAIA 还是 CyBench，trace artifacts、replay 文件与 run metadata 都完全一致。
+
+## 支持的 benchmarks
+
+| Benchmark | 领域 | 主指标 |
+|---|---|---|
+| [GAIA](/zh/benchmarks/gaia) | 通用 AI assistant 任务 | Exact match accuracy |
+| [Tau-Bench](/zh/benchmarks/tau-bench) | Tool-agent-user 交互 | Reward / pass^k |
+| [CyBench](/zh/benchmarks/cybench) | CTF 风格安全评测 | Guided subtask score |
+
+## 安装 benchmark 依赖
+
+```bash
+pip install "qitos[benchmarks]"
+```
+
+## single kernel rule
+
+每个 benchmark adapter 都会把原始数据格式转换成标准 `Task` 对象，然后交给 `Engine.run(task)` 执行。没有第二套 benchmark runner，也没有特殊执行模式。
+
+```text
+Dataset rows
+    ↓  BenchmarkAdapter.to_tasks()
+list[Task]
+    ↓  Engine.run(task)
+Trace + Steps + Manifest
+```
+
+这意味着：
+
+- benchmark runs 会产出和普通 runs 完全相同的 `manifest.json`、`events.jsonl` 与 `steps.jsonl`
+- 你可以直接用 `qita replay` 回放 benchmark run
+- 可以用 `qita board` 跨 benchmark 比较 runs
+
+## BenchmarkAdapter 基础接口
+
+三个适配器都继承自 `qitos.benchmark.base` 中的 `BenchmarkAdapter`，核心职责是把 records 转成 `Task`。
+
+每个 adapter 通常还会提供：
+
+- `load_records()`
+- `to_tasks()`
+- 一行式 convenience loader
+
+## 如何检查 benchmark 结果
+
+运行完成后，直接使用 `qita`：
+
+```bash
+qita board --logdir runs
+qita replay --run runs/<run_id>
+qita export --run runs/<run_id> --html run.html
+```
+
+输出 JSONL 中通常会包含：
+
+- `task_id`
+- `prediction`
+- `stop_reason`
+- `steps`
+- `latency_seconds`
+
+这让你可以离线聚合指标，而无需重新运行整个 benchmark。

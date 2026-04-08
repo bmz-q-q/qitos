@@ -1,0 +1,258 @@
+---
+title: "Critics 与停止条件"
+description: "使用 critics、stop criteria 与 recovery policy 约束 agent 运行。"
+---
+
+Engine 提供两套互补机制来控制 run 的生命周期：
+
+- **Critics**：在 `reduce()` 之后验证每一步，可以允许继续、强制停止，或要求重试本步。
+- **Stop criteria**：在 critics 通过后进行统一停止判断，根据 state 与 runtime 指标决定是否结束循环。
+
+## Critics
+
+critic 会接收当前 state、本步 decision 和 action results，然后返回一个结构化 verdict dict。
+
+### Critic 契约
+
+```python
+from abc import ABC, abstractmethod
+from typing import Any, Dict
+from qitos.engine.critic import Critic
+from qitos.core.decision import Decision
+
+class Critic(ABC):
+    @abstractmethod
+    def evaluate(
+        self,
+        state: Any,
+        decision: Decision[Any],
+        results: list[Any],
+    ) -> Dict[str, Any]:
+        """Return a critic decision dict.
+
+        Supported keys:
+        - action: "continue" | "stop" | "retry"
+        - reason: str
+        - score: float
+        - details: dict
+        """
+```
+
+### 支持的 critic 动作
+
+| `action` | Engine 行为 |
+|---|---|
+| `"continue"` | 接受本步，继续运行 |
+| `"stop"` | 把 `state.stop_reason` 设为 `StopReason.CRITIC_STOP` 并结束 |
+| `"retry"` | 重试当前 step，保留 observation 并递增 step counter |
+
+除 `"stop"` 和 `"retry"` 外，其他值都会被视作 `"continue"`。
+
+### 如何给 run 添加 critics
+
+可以直接在 `agent.run()` 时传入：
+
+```python
+result = agent.run(
+    task="...",
+    max_steps=10,
+    critics=[MyScoreCritic(), MyGroundingCritic()],
+    return_state=True,
+)
+```
+
+也可以在直接构造 `Engine` 时传入：
+
+```python
+from qitos.engine.engine import Engine
+
+engine = Engine(agent=agent, critics=[MyScoreCritic()])
+result = engine.run("my task")
+```
+
+### 自定义 critic 示例
+
+```python
+from typing import Any, Dict
+from qitos.engine.critic import Critic
+from qitos.core.decision import Decision
+
+
+class VerificationCritic(Critic):
+    """Stop or retry when the verification command fails."""
+
+    def evaluate(
+        self,
+        state: Any,
+        decision: Decision[Any],
+        results: list[Any],
+    ) -> Dict[str, Any]:
+        for result in results:
+            if isinstance(result, dict):
+                returncode = int(result.get("returncode", 0))
+                if returncode != 0:
+                    return {
+                        "action": "retry",
+                        "reason": f"command failed with returncode={returncode}",
+                        "score": 0.0,
+                    }
+        return {"action": "continue", "score": 1.0}
+```
+
+critic 输出会被记录进 trace 的 `step.critic_outputs`，并可在 `qita` 中查看。
+
+---
+
+## Stop criteria
+
+stop criteria 会在每步的 critic 阶段之后执行。每个 criterion 都会接收当前 state、step count 与 runtime info。
+
+### StopCriteria 契约
+
+```python
+from abc import ABC, abstractmethod
+from typing import Any, Dict, Optional, Tuple
+from qitos.engine.stop_criteria import StopCriteria
+from qitos.core.errors import StopReason
+
+class StopCriteria(ABC):
+    @abstractmethod
+    def should_stop(
+        self,
+        state: Any,
+        step_count: int,
+        runtime_info: Optional[Dict[str, Any]] = None,
+    ) -> Tuple[bool, Optional[StopReason], Optional[str]]:
+        """Return (should_stop, reason, detail)."""
+```
+
+### 内置 criteria
+
+QitOS 在 `qitos.engine.stop_criteria` 中提供四个常用实现：
+
+**`FinalResultCriteria`**（默认）
+
+当 `state.final_result` 被设置为非空字符串时停止。这是默认唯一启用的 criterion。
+
+```python
+from qitos.engine.stop_criteria import FinalResultCriteria
+```
+
+**`MaxStepsCriteria`**
+
+当步数达到 `max_steps` 时停止。一般由 `RuntimeBudget` 自动注入，通常无需手动创建。
+
+```python
+from qitos.engine.stop_criteria import MaxStepsCriteria
+
+criterion = MaxStepsCriteria(max_steps=15)
+```
+
+**`MaxRuntimeCriteria`**
+
+当墙钟时间超过阈值时停止。
+
+```python
+from qitos.engine.stop_criteria import MaxRuntimeCriteria
+
+criterion = MaxRuntimeCriteria(max_runtime_seconds=120.0)
+```
+
+**`StagnationCriteria`**
+
+当 state 连续若干步没有有效变化时停止。它会使用一个 signature function 来判断“是否变化”。
+
+```python
+from qitos.engine.stop_criteria import StagnationCriteria
+
+criterion = StagnationCriteria(
+    max_stagnant_steps=3,
+    signature_fn=lambda s: (s.final_result, getattr(s, "cursor", None)),
+)
+```
+
+### 给 run 传入 stop criteria
+
+```python
+from qitos.engine.stop_criteria import FinalResultCriteria, MaxRuntimeCriteria, StagnationCriteria
+
+result = agent.run(
+    task="...",
+    max_steps=20,
+    stop_criteria=[
+        FinalResultCriteria(),
+        MaxRuntimeCriteria(max_runtime_seconds=300.0),
+        StagnationCriteria(max_stagnant_steps=4),
+    ],
+    return_state=True,
+)
+```
+
+<Warning>
+  一旦你手动传入 `stop_criteria`，就会**替换**默认的 `FinalResultCriteria`。如果你仍希望在 `final_result` 被设置时自动停止，请记得把 `FinalResultCriteria()` 也放进去。
+</Warning>
+
+### 自定义 criterion 示例
+
+```python
+from typing import Any, Dict, Optional, Tuple
+from qitos.engine.stop_criteria import StopCriteria
+from qitos.core.errors import StopReason
+
+
+class MinEvidenceCriteria(StopCriteria):
+    """Only stop after at least N evidence items are collected."""
+
+    def __init__(self, min_evidence: int = 3):
+        self.min_evidence = min_evidence
+
+    def should_stop(
+        self,
+        state: Any,
+        step_count: int,
+        runtime_info: Optional[Dict[str, Any]] = None,
+    ) -> Tuple[bool, Optional[StopReason], Optional[str]]:
+        evidence = getattr(state, "evidence", [])
+        final_result = getattr(state, "final_result", None)
+        if final_result and len(evidence) >= self.min_evidence:
+            return True, StopReason.FINAL, f"evidence={len(evidence)} >= min={self.min_evidence}"
+        return False, None, None
+```
+
+---
+
+## 用 TaskBudget 表达预算停止
+
+对于结构化任务，通常用 `TaskBudget` 同时表达三种预算：
+
+```python
+from qitos.core.task import Task, TaskBudget
+
+task = Task(
+    id="research-001",
+    objective="Summarize the article at the given URL.",
+    budget=TaskBudget(
+        max_steps=15,
+        max_runtime_seconds=180.0,
+        max_tokens=8192,
+    ),
+)
+
+result = agent.run(task=task, return_state=True)
+```
+
+当传入 `Task` 时，Engine 会在 run 开始前把 `TaskBudget` 应用到内部 `RuntimeBudget` 上。
+
+## StopReason 值
+
+`StopReason` 是 `qitos.core.errors` 中的字符串枚举。每次 run 结束后，都会写入 `state.stop_reason`。
+
+| 值 | 含义 |
+|---|---|
+| `success` | 运行成功完成 |
+| `final` | `state.final_result` 被设置，触发 `FinalResultCriteria` |
+| `budget_steps` | 达到 `max_steps` |
+| `budget_time` | 超过 `max_runtime_seconds` |
+| `budget_tokens` | 超过 `max_tokens` |
+| `critic_stop` | critic 返回了 `action: "stop"` |
+| `stagnation` | 连续多步 state 未发生有效变化 |

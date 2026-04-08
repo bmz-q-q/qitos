@@ -1,0 +1,125 @@
+---
+title: "教程课程"
+description: "一套面向研究者的自洽课程，帮助你在 QitOS mindmap 中设计 agent。"
+---
+
+这条教程轨道建议按顺序完成。
+
+它不是 examples 展示墙，而是一门课程：帮助你在 QitOS 的 mindmap 中设计 agent，而不用猜 prompt policy、parser 选择、tool composition、memory 与 traceability 到底该落在哪一层。
+
+四节课共享同一个内核：
+
+`task -> state -> prompt/protocol -> decision -> tool execution -> reduce -> trace`
+
+变化的不是 runtime，而是你在这条主链路之上逐层叠加的 policy。
+
+## 这条课程和一般教程有什么不同
+
+每一课都是自洽的，也就是说它都会明确回答：
+
+- 这一课到底在构建什么 agent
+- 新引入了哪些 state 字段，以及它们为什么重要
+- 本课使用什么 system prompt，或什么 prompt 对
+- parser 或 protocol 契约如何和 prompt 对齐
+- 暴露了哪些 tools 或 preset toolset
+- 使用什么 model harness 与 LLM 通信
+- 在这个复杂度阶段，memory 与 history 应该如何选择
+- 运行后应该在 `qita` 里检查哪些 trace checkpoints
+
+如果某个概念在前面几课还没出现，那通常是刻意设计，而不是遗漏。课程是递进式的。
+
+## QitOS agent 设计工作表
+
+在 QitOS 中设计 agent，本质上总是在回答同一组问题：
+
+| 设计问题 | 对应 QitOS 表面 | 你要做的决定 |
+|---|---|---|
+| agent 要解决什么问题？ | `task`、`prepare()` | 每步要暴露给模型的目标与上下文 |
+| 哪些信息必须跨步保存？ | `StateSchema` | 计划、scratchpad、findings、mode flags、ranked summaries |
+| 模型该如何输出？ | `build_system_prompt()`、`model_parser`、`model_protocol` | 文本、JSON、XML、Terminus、MiniMax 或 model-specific harness |
+| agent 能做什么？ | `ToolRegistry`、preset toolsets | 最小工具、coding presets、audit tools、web tools、task boards |
+| loop 如何从执行中学习？ | `reduce()` | 哪些内容进入 state，哪些只留在 trace，什么算成功 |
+| 长时运行如何保持稳定？ | `HistoryPolicy`、`History`、`Memory` | 消息裁剪、compaction、retrieval、durable memory |
+| 如何检查 agent 行为？ | `TraceWriter`、`qita` | board、replay、export、prompt hash、parser diagnostics、context telemetry |
+
+这张工作表会贯穿四节课始终。
+
+## 课程递进路线
+
+| 课次 | 你会构建什么 | 新增的设计点 | Prompt 与 Parser | Tools | Context 策略 |
+|---|---|---|---|---|---|
+| 1. ReAct | 最小但真实可用的 coding agent | 学会默认的 `LLM -> parser -> Decision` 路径 | `REACT_SYSTEM_PROMPT` + `ReActTextParser` | 手工 `ToolRegistry` + 紧凑 `CodingToolSet` | 无 memory，无 compaction，只在 state 中保留小 scratchpad |
+| 2. PlanAct | planning-first 的修复 agent | 引入显式 planning，而不新增第二个 runtime | `PLAN_DRAFT_PROMPT` 用于 planning，`PLAN_EXEC_SYSTEM_PROMPT` + `ReActTextParser` 用于执行 | 与第 1 课相同的 coding tools | plan 放进 state，仍不引入 memory/compaction |
+| 3. Claude Code 风格 agent | 长时间运行的 coding agent | 从手工 wiring 过渡到 preset toolsets 与 workflow prompts | 自定义 workflow system prompt + `ReActTextParser` | `coding_tools(...)` preset | 先用 `HistoryPolicy`，再理解何时需要 `CompactHistory` 与 memory |
+| 4. 代码安全审计 agent | 领域化 review agent | 在不重写 runtime 的情况下做 domain specialization | `SECURITY_AUDIT_SYSTEM_PROMPT` + `ReActTextParser`，并讨论 protocol 升级 | `SecurityAuditToolSet` + codebase/task tools | ranked findings、bounded history、audit-oriented traces |
+
+## model harness 在课程中的位置
+
+前三课刻意使用同一种简单 harness：
+
+- `OpenAICompatibleModel`
+- 文本输出
+- 通过 prompt 注入 tool schema
+- `ReActTextParser`
+
+这是理解内核最短、最透明的路径。
+
+到后面你会逐渐学会何时该做 protocol 升级：
+
+- 如果你要最大可迁移性，就继续使用文本 ReAct
+- 如果你需要更严格的输出契约，可以升级到 JSON 或 XML
+- 如果 agent 正在驱动 live terminal stream，可以考虑 Terminus 协议
+- 如果模型原生输出结构化 tool calls，可以考虑 `MiniMaxToolCallParser` 等 model-specific harness
+
+QitOS 支持这些变体，但课程从最可迁移、最容易观察的路径开始。
+
+## 推荐学习顺序
+
+<CardGroup cols={2}>
+  <Card title="第 1 课：ReAct" icon="brain" href="/zh/tutorials/react">
+    从最小但完整的 agent 开始，理解真实 prompt、真实 parser、真实 tools 与 qita
+  </Card>
+  <Card title="第 2 课：PlanAct" icon="list-check" href="/zh/tutorials/planact">
+    加入显式 planning，但仍保留同一条默认 Engine 主链路
+  </Card>
+  <Card title="第 3 课：Claude Code 风格 agent" icon="rectangle-terminal" href="/zh/tutorials/claude-code">
+    学习 preset toolsets、workflow prompts、history control 与 compaction 的引入时机
+  </Card>
+  <Card title="第 4 课：代码安全审计 agent" icon="shield-check" href="/zh/tutorials/code-security-audit">
+    学习领域专门化、ranked findings，以及如何把 qita 用作 review artifact
+  </Card>
+</CardGroup>
+
+## 开始前建议
+
+- 先跑过 [Quickstart](/zh/quickstart) 或 [构建第一个 Agent](/zh/guides/build-your-first-agent)
+- 已经理解 [Agent Module](/zh/concepts/agent-module) 与 [Engine](/zh/concepts/engine) 的职责划分
+- 能够提供一个 OpenAI-compatible endpoint，例如 `OpenAICompatibleModel`
+
+## 完成四课后，你应该掌握什么
+
+你应该能够：
+
+- 把 system prompt 当作协议契约，而不是模糊说明文字
+- 选择和 prompt 相匹配的 parser，而不是把 parsing 视为事后清洗
+- 判断何时手工构建 registry，何时切换到 preset toolset
+- 区分 state-only memory、`HistoryPolicy`、`CompactHistory` 与显式 memory adapters
+- 判断什么时候值得引入 model-specific harness
+- 使用 `qita` 调试 prompt failures、parser failures、bad tool choices 与 context collapse
+
+## 延伸阅读
+
+<CardGroup cols={2}>
+  <Card title="构建第一个 Agent" icon="code" href="/zh/guides/build-your-first-agent">
+    在课程前或课程中回顾基础 AgentModule 契约
+  </Card>
+  <Card title="Agent 模式" icon="diagram-project" href="/zh/guides/agent-patterns">
+    查看 ReAct、PlanAct、ToT 与 Reflexion 的更大地图
+  </Card>
+  <Card title="Kit 参考" icon="toolbox" href="/zh/reference/kit">
+    查询课程中涉及的 parsers、planners、toolsets、memory 与 history helpers
+  </Card>
+  <Card title="可观测性" icon="chart-line" href="/zh/guides/observability">
+    了解 qita board、replay 与 export 如何把 traces 变成研究 artifacts
+  </Card>
+</CardGroup>

@@ -14,9 +14,10 @@
     }
   },
   "navigation": {
-    "tabs": [
+    "languages": [
       {
-        "tab": "Docs",
+        "language": "en",
+        "default": true,
         "groups": [
           {
             "group": "Get Started",
@@ -72,6 +73,67 @@
               "reference/kit",
               "reference/cli",
               "reference/configuration"
+            ]
+          }
+        ]
+      },
+      {
+        "language": "zh",
+        "groups": [
+          {
+            "group": "开始使用",
+            "pages": [
+              "zh/introduction",
+              "zh/quickstart",
+              "zh/installation"
+            ]
+          },
+          {
+            "group": "核心概念",
+            "pages": [
+              "zh/concepts/agent-module",
+              "zh/concepts/engine",
+              "zh/concepts/state-and-task",
+              "zh/concepts/tools-and-registry",
+              "zh/concepts/tracing"
+            ]
+          },
+          {
+            "group": "指南",
+            "pages": [
+              "zh/guides/build-your-first-agent",
+              "zh/guides/agent-patterns",
+              "zh/guides/memory-and-history",
+              "zh/guides/critics-and-stop-criteria",
+              "zh/guides/observability"
+            ]
+          },
+          {
+            "group": "教程",
+            "pages": [
+              "zh/tutorials/index",
+              "zh/tutorials/react",
+              "zh/tutorials/planact",
+              "zh/tutorials/claude-code",
+              "zh/tutorials/code-security-audit"
+            ]
+          },
+          {
+            "group": "基准测试",
+            "pages": [
+              "zh/benchmarks/overview",
+              "zh/benchmarks/gaia",
+              "zh/benchmarks/tau-bench",
+              "zh/benchmarks/cybench"
+            ]
+          },
+          {
+            "group": "参考",
+            "pages": [
+              "zh/reference/api",
+              "zh/reference/kit",
+              "zh/reference/cli",
+              "zh/reference/configuration"
             ]
           }
         ]

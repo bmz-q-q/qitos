@@ -1,0 +1,202 @@
+---
+title: "Agent Module"
+description: "AgentModule 是策略层，用来定义 agent 如何初始化状态、构造 prompt、做决策，并把观测归约到下一步状态。"
+---
+
+`AgentModule` 是你定义 agent 行为时要实现的核心契约。它负责 agent “如何思考”的全部内容：状态初始化、prompt 构造、决策逻辑以及状态归约，但它**不执行循环本身**。执行循环由 [Engine](/zh/concepts/engine) 负责。
+
+## 泛型参数
+
+`AgentModule` 有三个泛型类型参数：
+
+```python
+class AgentModule(ABC, Generic[StateT, ObservationT, ActionT]):
+    ...
+```
+
+| 参数 | 含义 |
+|---|---|
+| `StateT` | 你的强类型状态类，必须继承 `StateSchema` |
+| `ObservationT` | Engine 传给各个 hooks 的 observation 类型 |
+| `ActionT` | `decide` 产生的 action 类型 |
+
+一个完整的强类型声明通常长这样：
+
+```python
+class MyAgent(AgentModule[MyState, dict[str, Any], Action]):
+    ...
+```
+
+## 六个 hooks
+
+`AgentModule` 定义了六个 hooks。其中两个是**必需的**：`init_state` 与 `reduce`。其余 hooks 都是**可选的**，并且有合理默认值。
+
+### `init_state`（必需）
+
+每次 run 开始时调用一次。你需要返回一个初始状态对象，通常基于 task 字符串初始化。
+
+```python
+def init_state(self, task: str, **kwargs: Any) -> StateT:
+    return MyState(task=task, max_steps=int(kwargs.get("max_steps", 10)))
+```
+
+所有传给 `Engine.run()` 或 `agent.run()` 的关键字参数都会流到这里，所以你可以通过 `kwargs` 接收 `max_steps` 或其他初始化字段。
+
+### `reduce`（必需）
+
+每次 action cycle 结束后调用。它把“旧状态 + 新观测 + 本步决策”归约成“下一步状态”。这就是 agent 从执行结果中学习的地方。
+
+```python
+def reduce(
+    self,
+    state: StateT,
+    observation: ObservationT,
+    decision: Decision[ActionT],
+) -> StateT:
+    ...
+    return state
+```
+
+<Warning>
+  `reduce` 必须返回 `state` 或一个新的 state 对象。返回 `None` 会触发运行时错误。
+</Warning>
+
+### `build_system_prompt`（可选）
+
+返回动态 system prompt；如果返回 `None`，则本步不使用 system prompt。它会在每个 decide step 之前调用，因此 prompt 可以根据当前 state 动态变化。
+
+```python
+def build_system_prompt(self, state: StateT) -> str | None:
+    return render_prompt(SYSTEM_TEMPLATE, {"tools": self.tool_registry.get_tool_descriptions()})
+```
+
+默认实现返回 `None`。
+
+### `prepare`（可选）
+
+把当前 state 转成模型可直接消费的文本，也就是 user turn。默认行为是 `str(state)`。通常你会覆写它，把多个状态字段组织成结构化输入。
+
+```python
+def prepare(self, state: StateT) -> str:
+    return f"Task: {state.task}\nStep: {state.current_step}/{state.max_steps}"
+```
+
+### `decide`（可选）
+
+如果你想在 Engine 走默认 LLM 路径之前插入自定义决策逻辑，就覆写它。返回 `None` 时，Engine 会继续走模型调用与 parser 路径。
+
+```python
+def decide(self, state: StateT, observation: ObservationT) -> Decision[ActionT] | None:
+    if state.current_step == 0:
+        return Decision.act([Action(name="add", args={"a": 40, "b": 2})])
+    return None
+```
+
+### `should_stop`（可选）
+
+在每步 `reduce` 之后额外检查一次停止条件。返回 `True` 会终止运行。Engine 的内置 stop criteria 仍会继续叠加生效。
+
+```python
+def should_stop(self, state: StateT) -> bool:
+    return state.final_result is not None
+```
+
+## 一个最小可运行示例
+
+下面是最小的可运行 `AgentModule`。它不会调用 LLM，而是直接硬编码决策，因此很适合作为测试模板。
+
+```python
+from dataclasses import dataclass
+from typing import Any
+
+from qitos import Action, AgentModule, Decision, StateSchema, ToolRegistry, tool
+
+
+@dataclass
+class CalcState(StateSchema):
+    pass
+
+
+class MinimalAgent(AgentModule[CalcState, dict[str, Any], Action]):
+    def __init__(self):
+        registry = ToolRegistry()
+
+        @tool(name="add")
+        def add(a: int, b: int) -> int:
+            """Add two integers."""
+            return a + b
+
+        registry.register(add)
+        super().__init__(tool_registry=registry)
+
+    def init_state(self, task: str, **kwargs: Any) -> CalcState:
+        return CalcState(task=task, max_steps=int(kwargs.get("max_steps", 2)))
+
+    def decide(self, state: CalcState, observation: dict[str, Any]) -> Decision[Action]:
+        if state.current_step == 0:
+            return Decision.act(
+                [Action(name="add", args={"a": 40, "b": 2})],
+                rationale="compute_answer",
+            )
+        return Decision.final("42")
+
+    def reduce(
+        self,
+        state: CalcState,
+        observation: dict[str, Any],
+        decision: Decision[Action],
+    ) -> CalcState:
+        action_results = observation.get("action_results", []) if isinstance(observation, dict) else []
+        if action_results:
+            state.final_result = str(action_results[0])
+        return state
+```
+
+## 如何运行 agent
+
+调用 `agent.run()` 即可执行一个任务。这是最常用入口。它会在内部创建 `Engine`、运行循环，并返回结果。
+
+```python
+agent = MinimalAgent()
+
+# 默认只返回 final_result 字符串
+answer = agent.run("compute 40 + 2", max_steps=2)
+
+# return_state=True 时返回完整 EngineResult
+result = agent.run("compute 40 + 2", max_steps=2, return_state=True)
+print(result.state.final_result)
+print(result.state.stop_reason)
+```
+
+`agent.run()` 最常见参数如下：
+
+| 参数 | 类型 | 说明 |
+|---|---|---|
+| `task` | `str \| Task` | 普通文本任务或结构化 `Task` 对象 |
+| `max_steps` | `int \| None` | 覆盖本次运行的步数预算 |
+| `workspace` | `str \| None` | 挂载到 host environment 的工作目录 |
+| `return_state` | `bool` | 返回 `EngineResult`，而不是 `state.final_result` |
+| `trace` | `bool \| TraceWriter` | `True` 自动启用 trace，`False` 关闭，或直接传入 `TraceWriter` |
+| `trace_logdir` | `str` | trace 输出目录，默认 `"./runs"` |
+| `parser` | `Parser` | 与 prompt 格式匹配的输出 parser |
+| `critics` | `list[Critic]` | 每步执行后评估的 critics |
+| `stop_criteria` | `list[StopCriteria]` | 除默认条件外的附加停止条件 |
+
+<Tip>
+  如果你需要更细粒度控制，例如自定义 hooks、branch selector，或在多次 run 之间复用同一个 Engine，可以使用 `agent.build_engine(**kwargs)`，然后直接调用 `engine.run(task)`。
+</Tip>
+
+## 构造函数参数
+
+`AgentModule.__init__` 支持这些参数，全部可选：
+
+```python
+AgentModule(
+    tool_registry=registry,   # ToolRegistry：agent 可用的工具
+    llm=model,                # LLM client，供 Engine 默认模型路径使用
+    model_parser=parser,      # 把原始模型输出解析成 Decision 的 parser
+    memory=memory,            # 跨步或跨 run 的 memory 实现
+    history=history,          # 单次 run 内的 history 实现
+    **config,                 # 额外配置，保存在 self.config
+)
+```
