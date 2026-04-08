@@ -5,6 +5,15 @@ description: "The torch-flavor framework for agent researchers building reproduc
 
 QitOS is the torch-flavor framework for agent researchers. Prototype methods, run benchmarks, and inspect long-horizon trajectories on one `AgentModule + Engine` kernel with built-in `qita` observability.
 
+## Two authoring paths
+
+QitOS deliberately keeps two top-level ways to build agents:
+
+- `Research-first`: handwrite the prompt, parser, protocol, transport, and tool surface so you can study and optimize the kernel directly.
+- `Preset-first`: start from family presets and preset tool builders when you want a fast baseline or quick multi-family switching.
+
+The framework is strongest when both paths remain first-class.
+
 <CardGroup cols={2}>
   <Card title="Quick Start" icon="rocket" href="/quickstart">
     Run your first agent in under 2 minutes
@@ -20,6 +29,15 @@ QitOS is the torch-flavor framework for agent researchers. Prototype methods, ru
   </Card>
   <Card title="API Reference" icon="rectangle-terminal" href="/reference/api">
     Full reference for the public QitOS API
+  </Card>
+</CardGroup>
+
+<CardGroup cols={2}>
+  <Card title="Research-first path" icon="flask" href="/guides/build-your-first-agent">
+    Handwrite prompt, parser, protocol, and tool surface on top of the kernel.
+  </Card>
+  <Card title="Preset-first path" icon="shuffle" href="/tutorials/switch-model-families">
+    Use family presets to switch one example across multiple model families.
   </Card>
 </CardGroup>
 

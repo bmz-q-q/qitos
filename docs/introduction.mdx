@@ -9,6 +9,36 @@ A long-running QitOS coding run stays readable instead of turning into opaque gl
 
 ![QitOS live coding run](/images/demo.gif)
 
+## Two ways to author agents in QitOS
+
+QitOS keeps two authoring paths on purpose.
+
+### Research-first
+
+This is the default path for researchers who want the most control.
+
+You handwrite:
+
+- the system prompt
+- the parser
+- the model protocol
+- the model transport
+- the tool surface
+
+This is the most torch-like path in the framework: direct, explicit, and easy to mutate for experiments.
+
+### Preset-first
+
+This is the fastest path when you want a stable baseline or fast model-family switching.
+
+You start from:
+
+- family presets
+- harness policies
+- preset tool builders
+
+This path is especially useful when one agent should switch across Qwen, Kimi, MiniMax, `gpt-oss`, and Gemma 4 without rewriting the agent.
+
 ## Who QitOS is for
 
 QitOS is built for three kinds of practitioners:

@@ -13,6 +13,16 @@ Every lesson keeps the same kernel:
 
 What changes is the policy layer you build on top of that kernel.
 
+## Two authoring paths
+
+The course now explicitly teaches QitOS through two authoring paths:
+
+- `Research-first`: handwrite prompt, parser, protocol, transport, and tool surface.
+- `Preset-first`: keep the agent implementation stable and switch model families through family presets.
+
+The research-first path is still the default mental model for understanding the kernel.
+The preset-first path is the acceleration layer you adopt once you want stronger reuse or cleaner multi-family comparisons.
+
 ## What makes this track different
 
 Each lesson is written to be self-contained. That means every lesson explicitly covers:
@@ -94,6 +104,15 @@ QitOS supports those variants, but the course starts with the most transferable 
   </Card>
   <Card title="Lesson 4: Code security audit agent" icon="shield-check" href="/tutorials/code-security-audit">
     Learn domain specialization, ranked findings, and how to use qita as a review artifact.
+  </Card>
+</CardGroup>
+
+<CardGroup cols={2}>
+  <Card title="Research-first example" icon="flask" href="https://github.com/Qitor/qitos/blob/main/examples/real/research_harness_agent.py">
+    See the bare handwritten harness path in one real coding agent.
+  </Card>
+  <Card title="Preset-first switching" icon="shuffle" href="/tutorials/switch-model-families">
+    Learn how one coding agent switches across multiple model families.
   </Card>
 </CardGroup>
 

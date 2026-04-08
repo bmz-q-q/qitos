@@ -5,6 +5,15 @@ description: "面向 agent 研究者的 torch-flavor 框架，用单一 AgentMod
 
 QitOS 是面向 agent 研究者的 torch-flavor 框架。你可以在同一个 `AgentModule + Engine` 内核上原型化方法、运行 benchmark，并用内建 `qita` 观察长时轨迹。
 
+## 两条 authoring path
+
+QitOS 会刻意保留两条顶层的 agent 编写路径：
+
+- `Research-first`：手写 prompt、parser、protocol、transport 和 tool surface，直接研究与优化 kernel。
+- `Preset-first`：从 family preset 和 preset tool builders 出发，快速得到稳定 baseline 与多模型切换能力。
+
+这两条路径都应该是一等公民。
+
 <CardGroup cols={2}>
   <Card title="快速开始" icon="rocket" href="/zh/quickstart">
     2 分钟内跑起第一个 agent
@@ -20,6 +29,15 @@ QitOS 是面向 agent 研究者的 torch-flavor 框架。你可以在同一个 `
   </Card>
   <Card title="API 参考" icon="rectangle-terminal" href="/zh/reference/api">
     查看公开 Python API 与 CLI
+  </Card>
+</CardGroup>
+
+<CardGroup cols={2}>
+  <Card title="Research-first 路径" icon="flask" href="/zh/guides/build-your-first-agent">
+    手写 prompt、parser、protocol 与 tool surface，直接理解 kernel。
+  </Card>
+  <Card title="Preset-first 路径" icon="shuffle" href="/zh/tutorials/switch-model-families">
+    用 family presets 在同一个 example 里快速切换多个模型家族。
   </Card>
 </CardGroup>
 
