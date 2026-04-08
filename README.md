@@ -2,7 +2,7 @@
 
 <img src="assets/logo.png" alt="QitOS Logo" width="75%">
 
-[![Python](https://img.shields.io/badge/python-3.9%2B-3776AB)](https://www.python.org/)
+[![Python](https://img.shields.io/badge/python-3.10%2B-3776AB)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Docs](https://img.shields.io/badge/docs-qitor.mintlify.app-0A66C2)](https://qitor.mintlify.app/)
 [![PyPI](https://img.shields.io/pypi/v/qitos.svg)](https://pypi.org/project/qitos/)
@@ -191,7 +191,7 @@ QitOS is currently **Alpha**.
 
 ## Installation and Versions
 
-- Supported Python version: **3.9+**
+- Supported Python version: **3.10+**
 - User install: `pip install qitos`
 - Repo quickstart: `pip install -r requirements.txt`
 - Full contributor install: `pip install -r requirements-dev.txt`

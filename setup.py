@@ -40,7 +40,7 @@ setup(
         "Issues": "https://github.com/Qitor/qitos/issues",
     },
     packages=find_packages(exclude=["tests*", "examples*", "templates*", "docs*"]),
-    python_requires=">=3.9",
+    python_requires=">=3.10",
     install_requires=[
         "requests>=2.31.0",
         "beautifulsoup4>=4.12.3",
@@ -91,7 +91,6 @@ setup(
         "Intended Audience :: Science/Research",
         "Operating System :: OS Independent",
         "Programming Language :: Python :: 3",
-        "Programming Language :: Python :: 3.9",
         "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: 3.11",
         "Programming Language :: Python :: 3.12",

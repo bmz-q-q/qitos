@@ -1,0 +1,81 @@
+name: Feature Request
+description: Propose a new QitOS capability, API, toolset, workflow, or documentation improvement.
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please focus on the user problem first. The best requests explain the workflow gap, not just the desired API shape.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem statement
+      description: What user workflow or research problem is currently hard with QitOS?
+      placeholder: I want to build ..., but today it is hard because ...
+    validations:
+      required: true
+
+  - type: dropdown
+    id: category
+    attributes:
+      label: Category
+      options:
+        - agent authoring / API design
+        - tools / toolsets
+        - parser / protocol / model harness
+        - memory / history / compaction
+        - tracing / qita / observability
+        - benchmarks / evaluation
+        - docs / tutorials
+        - examples
+        - packaging / release / CI
+        - other
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Describe the API, workflow, CLI, preset, or documentation change you want.
+      placeholder: I would like QitOS to support ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: What are you doing today instead, or what other designs did you consider?
+
+  - type: textarea
+    id: examples
+    attributes:
+      label: Example usage
+      description: Mock API, pseudo-code, or CLI examples are very helpful.
+      render: python
+
+  - type: textarea
+    id: design_notes
+    attributes:
+      label: QitOS design impact
+      description: If you have an opinion, explain how this should affect state, prompt/parser, tool surface, memory/history, or traceability.
+      placeholder: |
+        - state:
+        - prompt/parser:
+        - tools:
+        - memory/history:
+        - tracing/qita:
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checklist
+      options:
+        - label: I searched existing issues first.
+          required: true
+        - label: This request is framed in terms of user workflow or research value, not only implementation details.
+          required: true

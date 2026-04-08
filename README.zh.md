@@ -2,7 +2,7 @@
 
 <img src="assets/logo.png" alt="QitOS Logo" width="75%">
 
-[![Python](https://img.shields.io/badge/python-3.9%2B-3776AB)](https://www.python.org/)
+[![Python](https://img.shields.io/badge/python-3.10%2B-3776AB)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Docs](https://img.shields.io/badge/docs-qitor.mintlify.app-0A66C2)](https://qitor.mintlify.app/)
 [![PyPI](https://img.shields.io/pypi/v/qitos.svg)](https://pypi.org/project/qitos/)
@@ -167,7 +167,7 @@ QitOS 当前处于 **Alpha**。
 
 ## 安装与版本
 
-- 支持的 Python 版本：**3.9+**
+- 支持的 Python 版本：**3.10+**
 - 普通用户安装：`pip install qitos`
 - 仓库快速安装：`pip install -r requirements.txt`
 - 完整开发安装：`pip install -r requirements-dev.txt`

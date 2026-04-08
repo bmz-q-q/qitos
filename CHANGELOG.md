@@ -17,6 +17,10 @@ How to update:
 
 ## Unreleased
 
+### Changed
+
+- Dropped Python 3.9 support and aligned CI, packaging metadata, README, and installation docs around Python 3.10+.
+
 ### Added
 
 - Added PR/push CI gates covering tests, packaging validation, stable-surface linting, and stable-surface type checking.

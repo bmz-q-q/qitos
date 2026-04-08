@@ -1,0 +1,55 @@
+name: Docs Request
+description: Report missing, outdated, confusing, or inconsistent documentation.
+title: "[Docs]: "
+labels:
+  - documentation
+body:
+  - type: textarea
+    id: page
+    attributes:
+      label: Affected page or area
+      description: Which doc page, tutorial, README section, or concept is affected?
+      placeholder: /quickstart, /zh/tutorials/react, README, qita docs, ...
+    validations:
+      required: true
+
+  - type: dropdown
+    id: issue_type
+    attributes:
+      label: What kind of docs issue is this?
+      options:
+        - missing page or section
+        - outdated content
+        - confusing explanation
+        - broken example
+        - translation inconsistency
+        - navigation / information architecture
+        - typo or wording
+        - other
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What is wrong or missing?
+      description: Explain the gap from the reader's perspective.
+      placeholder: I expected the docs to explain ..., but instead ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposed_fix
+    attributes:
+      label: Suggested improvement
+      description: If you know how the page should change, tell us here.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checklist
+      options:
+        - label: I checked the English and Chinese docs, if applicable.
+          required: false
+        - label: I searched existing issues first.
+          required: true

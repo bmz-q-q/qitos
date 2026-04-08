@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security Issue
+    url: https://github.com/Qitor/qitos/blob/main/SECURITY.md
+    about: Please do not open public issues for security vulnerabilities. Follow the disclosure guidance in SECURITY.md.
+  - name: Documentation Site
+    url: https://qitor.mintlify.app/introduction
+    about: Check the docs and tutorials before opening a support-style issue.

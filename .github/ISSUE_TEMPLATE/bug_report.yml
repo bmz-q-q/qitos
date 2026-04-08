@@ -1,0 +1,91 @@
+name: Bug Report
+description: Report a reproducible bug in QitOS runtime, tools, models, docs, or benchmarks.
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve QitOS. Please give us a minimal, reproducible report so we can debug quickly.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What happened, and what did you expect to happen instead?
+      placeholder: A short description of the bug and the expected behavior.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: Which part of QitOS does this affect most?
+      options:
+        - core / AgentModule / Engine
+        - tools / tool registry / toolsets
+        - parser / model protocol
+        - memory / history / compaction
+        - tracing / qita / render
+        - benchmarks
+        - examples
+        - docs
+        - packaging / installation / CI
+        - other
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: Share the smallest possible reproduction, including code, commands, task input, and configuration.
+      placeholder: |
+        1. Install with ...
+        2. Run ...
+        3. Observe ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Error output or trace
+      description: Paste the stack trace, test failure, CI failure, or qita observation.
+      render: shell
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include OS, Python version, install method, provider/model, and anything else relevant.
+      placeholder: |
+        - OS:
+        - Python:
+        - Install method: pip / editable / CI
+        - QitOS version:
+        - Model provider:
+        - Model name:
+    validations:
+      required: true
+
+  - type: textarea
+    id: impact
+    attributes:
+      label: Impact
+      description: Does this block core runtime use, examples, docs, benchmarks, or release workflows?
+      placeholder: It blocks ..., affects ..., or causes ...
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checklist
+      options:
+        - label: I searched existing issues first.
+          required: true
+        - label: I can reproduce this on the current main branch or recent release.
+          required: false
+        - label: I included enough detail for someone else to reproduce it.
+          required: true
