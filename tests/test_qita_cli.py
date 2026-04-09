@@ -105,7 +105,20 @@ def _make_run(root: Path, run_id: str) -> Path:
     )
     step_payload = {
         "step_id": 0,
-        "observation": {},
+        "observation": {
+            "env": {
+                "observation": {
+                    "data": {
+                        "multimodal": {
+                            "grounding_metadata": {
+                                "boxes": [{"x": 24, "y": 18, "width": 36, "height": 20}],
+                                "ocr_spans": [{"text": "Continue", "x": 30, "y": 20}],
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "decision": {},
         "model_response": {
             "text": "Thought: inspect the run",
@@ -125,7 +138,7 @@ def _make_run(root: Path, run_id: str) -> Path:
             "provider": "demo-provider",
             "metadata": {},
         },
-        "actions": [],
+        "actions": [{"name": "click", "args": {"x": 42, "y": 28}}],
         "action_results": [],
         "tool_invocations": [],
         "critic_outputs": [],
@@ -224,6 +237,7 @@ def test_render_pages(tmp_path: Path):
     assert "export raw" in view
     assert "QitOS Replay" in replay
     assert "context timeline" in view
+    assert "visual timeline" in view
     assert "parser timeline" in view
     assert "Parser Diagnostics" in view
     assert "Context occupancy timeline" in view
@@ -238,8 +252,11 @@ def test_render_pages(tmp_path: Path):
     assert "native_tool_call_used" in view
     assert "tool_delivery" in view
     assert "Visual Assets" in view
+    assert "grounding metadata" in view
+    assert "critic retries" in view
     assert "model input images" in view
     assert "screen.png" in view
+    assert "replay screenshot" in replay
     marker = '<script id="payload" type="application/json">'
     start = view.index(marker) + len(marker)
     end = view.index("</script>", start)

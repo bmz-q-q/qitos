@@ -18,6 +18,8 @@ Prototype methods, run benchmarks, and inspect long-horizon trajectories on one 
 
 - v0.5 multimodal core phase 1 is now in the main kernel: OpenAI-compatible image input, screenshot-first `ObservationPack` support, qita visual asset inspection, and a new `visual_inspect_agent` baseline for visual-web / GUI research.
 - v0.5 computer-use phase 1 is now live: an OSWorld-inspired `DesktopEnv`, provider-neutral GUI action protocols, `ComputerUseToolSet`, and a new `openai_cua_agent` example for desktop automation research on OpenAI-compatible multimodal models.
+- Desktop benchmarking is now split into clear layers: `desktop-starter` remains the canonical starter benchmark, `qitos.recipes.desktop.osworld_starter` now hosts the reproducible baseline recipe, and `qitos.benchmark.osworld` is the new home for real OSWorld-style adapter/runtime/evaluator integration.
+- QitOS now separates starter benchmarks, real benchmark adapters, and reproducible recipes across the whole benchmark surface: GAIA, Tau-Bench, CyBench, `desktop-starter`, and `osworld` all route through `qitos.benchmark` plus `qitos.recipes`, with a new contributor guide for third-party benchmark integration.
 
 ## What's New in v0.3.0
 

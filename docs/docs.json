@@ -43,7 +43,9 @@
                   "tutorials/code-security-audit",
                   "tutorials/switch-model-families",
                   "tutorials/reproducible-benchmark-runs",
-                  "tutorials/replay-and-inspect-failed-runs"
+                  "tutorials/replay-and-inspect-failed-runs",
+                  "tutorials/run-your-first-desktop-benchmark",
+                  "tutorials/inspect-a-gui-failure-in-qita"
                 ]
               }
             ]
@@ -72,6 +74,9 @@
                 "guides/computer-use-desktop",
                 "guides/multimodal-core",
                 "guides/agent-patterns",
+                "guides/desktop-benchmark-starter",
+                "guides/benchmarks-and-recipes",
+                "guides/third-party-benchmark-integration",
                   "guides/add-a-family-preset",
                   "guides/qwen-family-best-practice",
                   "guides/memory-and-history",
@@ -83,6 +88,8 @@
                 "group": "Benchmarks",
                 "pages": [
                   "benchmarks/overview",
+                  "benchmarks/desktop-starter",
+                  "benchmarks/osworld",
                   "benchmarks/gaia",
                   "benchmarks/tau-bench",
                   "benchmarks/cybench"
@@ -111,7 +118,8 @@
                   "blog/index",
                   "blog/single-kernel",
                   "blog/reproducible-runs",
-                  "blog/gold-presets-preview"
+                  "blog/gold-presets-preview",
+                  "blog/desktop-osworld-starter"
                 ]
               }
             ]
@@ -145,7 +153,9 @@
                   "zh/tutorials/code-security-audit",
                   "zh/tutorials/switch-model-families",
                   "zh/tutorials/reproducible-benchmark-runs",
-                  "zh/tutorials/replay-and-inspect-failed-runs"
+                  "zh/tutorials/replay-and-inspect-failed-runs",
+                  "zh/tutorials/run-your-first-desktop-benchmark",
+                  "zh/tutorials/inspect-a-gui-failure-in-qita"
                 ]
               }
             ]
@@ -170,8 +180,13 @@
               {
                 "group": "指南",
                 "pages": [
-                  "zh/guides/build-your-first-agent",
-                  "zh/guides/agent-patterns",
+                "zh/guides/build-your-first-agent",
+                "zh/guides/computer-use-desktop",
+                "zh/guides/multimodal-core",
+                "zh/guides/agent-patterns",
+                "zh/guides/desktop-benchmark-starter",
+                "zh/guides/benchmarks-and-recipes",
+                "zh/guides/third-party-benchmark-integration",
                   "zh/guides/add-a-family-preset",
                   "zh/guides/qwen-family-best-practice",
                   "zh/guides/memory-and-history",
@@ -183,6 +198,8 @@
                 "group": "基准测试",
                 "pages": [
                   "zh/benchmarks/overview",
+                  "zh/benchmarks/desktop-starter",
+                  "zh/benchmarks/osworld",
                   "zh/benchmarks/gaia",
                   "zh/benchmarks/tau-bench",
                   "zh/benchmarks/cybench"
@@ -211,7 +228,8 @@
                   "zh/blog/index",
                   "zh/blog/single-kernel",
                   "zh/blog/reproducible-runs",
-                  "zh/blog/gold-presets-preview"
+                  "zh/blog/gold-presets-preview",
+                  "zh/blog/desktop-osworld-starter"
                 ]
               }
             ]

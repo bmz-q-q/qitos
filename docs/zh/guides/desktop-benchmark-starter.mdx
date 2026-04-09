@@ -1,0 +1,29 @@
+---
+title: "Desktop Benchmark Starter"
+description: "理解 v0.5 官方 desktop benchmark 路径如何构成完整发布叙事。"
+---
+
+# Desktop Benchmark Starter
+
+QitOS v0.5 现在有了一条明确的官方多模态主线：
+
+- `DesktopEnv`
+- `desktop-starter` benchmark
+- `qitos.recipes.desktop.osworld_starter`
+- `examples/real/openai_cua_agent.py`
+- qita visual replay
+
+如果你要做 computer-use 研究，这就是当前最值得采用的 canonical path。
+
+## 为什么这就是 v0.5 的发布路径
+
+因为它第一次把下面这些东西真正接在了一起：
+
+- benchmark family
+- canonical baseline agent
+- 统一 runner output
+- trace artifacts
+- qita visual debugging
+- docs/tutorial story
+
+如果你需要真实 benchmark adapter，而不是 starter path，请转向 `osworld`。

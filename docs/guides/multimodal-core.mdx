@@ -1,20 +1,20 @@
 ---
-title: "Multimodal Core and Visual-Web Research"
-description: "How QitOS v0.5 phase 1 adds screenshot-first multimodal input without breaking the existing parser and protocol model."
+title: "Multimodal Core and Desktop Starter"
+description: "How QitOS v0.5 turns the multimodal foundation into one complete desktop research path."
 ---
 
-# Multimodal Core and Visual-Web Research
+# Multimodal Core and Desktop Starter
 
-QitOS v0.5 starts with a narrow but important goal:
+QitOS v0.5 now has one complete multimodal release path:
 
-- support screenshot-first multimodal input cleanly
-- keep the same `AgentModule + Engine` kernel
-- keep existing parser/protocol/tool-schema design intact
-- prepare the framework for GUI environments such as OSWorld without hard-coding the abstraction to one benchmark
+- screenshot-first multimodal input
+- `DesktopEnv`
+- the official `desktop` benchmark family
+- the `openai_cua_agent.py` baseline
+- qita visual inspection
 
-This phase is intentionally **not** “just add image input”.
-
-The point is to make multimodal input fit the same runtime story as text, tools, traces, and qita.
+The point is no longer only “multimodal foundation”.
+The point is that one desktop / computer-use story now holds together end to end.
 
 ## The first wire target: OpenAI-compatible chat completions
 
@@ -119,7 +119,7 @@ It demonstrates a very small but complete path:
 
 This example is a better starting point for visual-web / GUI research than jumping straight into a benchmark runner.
 
-## qita support in phase 1
+## qita support in v0.5
 
 qita now records and shows:
 
@@ -127,14 +127,10 @@ qita now records and shows:
 - visual asset metadata
 - the current step's observation modalities
 - whether the model input included images
-
-Phase 1 does **not** yet include:
-
-- screenshot timeline replay
-- click overlays
-- grounding visualizations
-
-Those belong to the next phase.
+- screenshot timeline cards
+- replay screenshot preview
+- basic action overlays
+- grounding metadata visibility
 
 ## Why this matters for OSWorld-style work
 
@@ -155,18 +151,12 @@ That means the next OSWorld adapter can be built **on top of** the kernel instea
 
 ## Current boundary
 
-This phase intentionally stops at:
+v0.5 still does **not** promise:
 
-- screenshot-first observation
-- OpenAI-compatible multimodal requests
-- minimal GUI SDK primitives
-- first-pass qita visibility
+- full official OSWorld parity
+- full visual replay depth planned for v0.6
+- broad provider parity across every multimodal runtime
 
-It does not yet promise:
+The release bar is narrower and clearer:
 
-- full OSWorld integration
-- provider-wide multimodal parity
-- complete GUI action execution
-- full visual replay
-
-That boundary is deliberate. We want a clean core first, then richer computer-use support.
+**one strong desktop starter path**

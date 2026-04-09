@@ -53,6 +53,8 @@ from .multimodal import (
     ObservationPack,
     GroundingMetadata,
     VisualTraceAsset,
+    ActionSpace,
+    EnvironmentAdapter,
 )
 from .tool import BaseTool, FunctionTool, ToolPermission, ToolSpec, tool
 from .tool_registry import ToolRegistry
@@ -105,6 +107,8 @@ __all__ = [
     "ObservationPack",
     "GroundingMetadata",
     "VisualTraceAsset",
+    "ActionSpace",
+    "EnvironmentAdapter",
     "BaseTool",
     "FunctionTool",
     "ToolPermission",

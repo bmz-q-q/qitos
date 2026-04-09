@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass, field, is_dataclass
 import base64
 import mimetypes
@@ -129,6 +130,77 @@ class VisualTraceAsset:
             "metadata": dict(self.metadata),
         }
         return {k: v for k, v in payload.items() if v not in (None, [], {})}
+
+
+@dataclass(frozen=True)
+class ActionSpace:
+    """Lightweight action vocabulary contract for multimodal environments."""
+
+    id: str
+    allowed_actions: List[str] = field(default_factory=list)
+    required_args: Dict[str, List[str]] = field(default_factory=dict)
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+    def validate(self, action: Mapping[str, Any]) -> Dict[str, Any]:
+        action_name = str(
+            action.get("action_type") or action.get("name") or ""
+        ).strip()
+        args = (
+            dict(action.get("args") or {})
+            if isinstance(action.get("args"), Mapping)
+            else {}
+        )
+        errors: List[str] = []
+        if not action_name:
+            errors.append("missing action name")
+        if self.allowed_actions and action_name not in set(self.allowed_actions):
+            errors.append(f"unsupported action: {action_name}")
+        for key in self.required_args.get(action_name, []):
+            value = args.get(key)
+            if value in (None, ""):
+                errors.append(f"missing required arg `{key}`")
+        return {
+            "ok": not errors,
+            "action_name": action_name,
+            "errors": errors,
+        }
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "id": self.id,
+            "allowed_actions": list(self.allowed_actions),
+            "required_args": {k: list(v) for k, v in self.required_args.items()},
+            "metadata": dict(self.metadata),
+        }
+
+
+class EnvironmentAdapter(ABC):
+    """Minimal adapter contract for benchmark-facing multimodal environments."""
+
+    @property
+    @abstractmethod
+    def name(self) -> str:
+        """Stable adapter identifier."""
+
+    @abstractmethod
+    def capabilities(self) -> Dict[str, Any]:
+        """Return environment capabilities relevant to the benchmark/runtime."""
+
+    @abstractmethod
+    def action_space(self) -> ActionSpace:
+        """Return the action space used for validation and replay."""
+
+    @abstractmethod
+    def reset(self, task: Any, workspace: Optional[str] = None) -> Any:
+        """Reset one task episode."""
+
+    @abstractmethod
+    def observe(self, state: Any = None) -> Any:
+        """Return current observation."""
+
+    @abstractmethod
+    def step(self, action: Mapping[str, Any], state: Any = None) -> Any:
+        """Execute one normalized action."""
 
 
 def text_block(text: str) -> Dict[str, Any]:
@@ -391,6 +463,11 @@ def observation_visual_assets(
             else None
         ),
         source_step=source_step,
+        grounding_refs=(
+            pack.grounding_metadata.to_dict().get("boxes", [])
+            if isinstance(pack.grounding_metadata, GroundingMetadata)
+            else []
+        ),
         metadata={
             key: value
             for key, value in screenshot.items()
@@ -406,6 +483,8 @@ __all__ = [
     "ObservationPack",
     "GroundingMetadata",
     "VisualTraceAsset",
+    "ActionSpace",
+    "EnvironmentAdapter",
     "SUPPORTED_CONTENT_TYPES",
     "text_block",
     "image_url_block",

@@ -1,0 +1,69 @@
+---
+title: "Benchmarks and Recipes"
+description: "How QitOS separates framework capabilities, benchmark adapters, and reproducible recipe baselines."
+---
+
+# Benchmarks and Recipes
+
+QitOS now keeps three different layers separate on purpose.
+
+## 1. Framework layer
+
+This is the reusable kernel:
+
+- `AgentModule + Engine`
+- `DesktopEnv`
+- `ActionSpace`
+- `EnvironmentAdapter`
+- family presets
+- qita replay and visual inspection
+
+Framework code should stay benchmark-agnostic.
+
+## 2. Benchmark layer
+
+This is where dataset-specific integration belongs:
+
+- `qitos.benchmark.desktop` for the starter benchmark family
+- `qitos.benchmark.osworld` for the real OSWorld adapter path
+- benchmark-specific runtimes
+- benchmark-specific evaluators/scorers
+- benchmark-native task metadata and artifact handling
+
+If something is about `test_all.json`, evaluator bridges, setup/postconfig, qcow2 boot inputs, or benchmark-native scoring, it belongs here.
+
+## 3. Recipe layer
+
+Recipes are reproducible baseline methods:
+
+- canonical single-agent baselines
+- benchmark baseline methods
+- multimodal starter methods
+
+The desktop baseline now lives in:
+
+- `/Users/morinop/coding/yoga_framework/qitos/recipes/desktop/osworld_starter.py`
+
+The public example:
+
+- `/Users/morinop/coding/yoga_framework/examples/real/openai_cua_agent.py`
+
+is now only a thin entrypoint around the recipe.
+
+The same structure now also applies to:
+
+- `qitos.recipes.benchmarks.gaia`
+- `qitos.recipes.benchmarks.tau_bench`
+- `qitos.recipes.benchmarks.cybench`
+
+## Why this split matters
+
+This split solves three real problems:
+
+- benchmark runners no longer depend on example files
+- one baseline can be reused by examples, docs, and benchmark runners
+- future `qitos-recipes` extraction becomes a packaging move instead of a redesign
+
+That is the right direction for QitOS as a research-first framework.
+
+If you are adding a new benchmark family, continue with [Third-party benchmark integration](/guides/third-party-benchmark-integration).

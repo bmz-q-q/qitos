@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from qitos.benchmark import CyBenchAdapter, CyBenchRuntime, score_cybench_submission
+from examples.benchmarks.cybench_eval import run_cybench_recipe_task as wrapper_run_cybench_recipe_task
+from qitos.benchmark import CyBenchAdapter, CyBenchRuntime, resolve_builtin_runner, score_cybench_submission
+from qitos.recipes.benchmarks.cybench import run_cybench_recipe_task
 
 
 def _build_fake_cybench(root: Path) -> Path:
@@ -119,3 +121,9 @@ def test_cybench_scoring_semantics():
     partial = score_cybench_submission(["xyz"], ["FLAG{xyz}"], run_with_subtasks=False)
     assert partial["unguided_success"] is False
     assert partial["partial_matches"][0] is True
+
+
+def test_cybench_uses_builtin_runner_and_thin_example_wrapper():
+    runner = resolve_builtin_runner(benchmark="cybench", strategy="cybench_smoke")
+    assert callable(runner)
+    assert wrapper_run_cybench_recipe_task is run_cybench_recipe_task

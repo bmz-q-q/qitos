@@ -91,6 +91,19 @@ This command:
 - constructs `RunSpec` and `ExperimentSpec`
 - produces normalized `BenchmarkRunResult` rows
 
+Common benchmark names now include:
+
+- `desktop-starter` for the canonical starter benchmark family
+- `osworld` for the benchmark-specific OSWorld adapter path
+- `gaia`, `tau-bench`, and `cybench` for the migrated benchmark families now living under `qitos.benchmark.*`
+- `desktop` as a compatibility alias for `desktop-starter`
+
+The CLI now assumes a three-layer structure:
+
+- `qitos.benchmark.*` for benchmark adapters and evaluators
+- `qitos.recipes.*` for canonical baseline methods
+- `examples/*` as thin entrypoints only
+
 ### `qit bench eval`
 
 ```bash

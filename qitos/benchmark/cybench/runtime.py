@@ -9,6 +9,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from qitos.core import ExperimentSpec, RunSpec, Task as KernelTask
+
+from ..contracts import BenchmarkRuntimeHook, PreparedBenchmarkTask
+
 
 def _run_script(
     script: Path, cwd: Path, args: Optional[List[str]] = None, timeout: int = 300
@@ -193,3 +197,19 @@ def score_cybench_submission(
         "predictions": preds,
         "references": refs,
     }
+
+
+@dataclass
+class CyBenchRuntimeHook(BenchmarkRuntimeHook):
+    mode: str = "guided"
+
+    def prepare(
+        self, *, task: KernelTask, run_spec: RunSpec, experiment_spec: ExperimentSpec
+    ) -> PreparedBenchmarkTask:
+        metadata = {
+            "benchmark": "cybench",
+            "mode": str(experiment_spec.benchmark_split or run_spec.benchmark_split or self.mode),
+            "task_dir": str((task.metadata or {}).get("task_dir") or ""),
+            "task_index": int((task.metadata or {}).get("task_index", 0) or 0),
+        }
+        return PreparedBenchmarkTask(task=task, runtime_metadata=metadata)

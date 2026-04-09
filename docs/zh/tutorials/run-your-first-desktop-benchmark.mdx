@@ -1,0 +1,29 @@
+---
+title: "运行你的第一个 Desktop Benchmark"
+description: "运行 QitOS v0.5 的官方 desktop benchmark，并用 qita 检查它。"
+---
+
+# 运行你的第一个 Desktop Benchmark
+
+这节课展示完整的 v0.5 desktop 主线：
+
+1. 运行官方 `desktop-starter` benchmark
+2. 查看标准化结果行
+3. 在 `qita` 中检查 visual trace
+
+```bash
+qit bench run \
+  --benchmark desktop-starter \
+  --split starter \
+  --strategy desktop_smoke \
+  --output ./artifacts/desktop-starter.jsonl
+```
+
+然后：
+
+```bash
+qit bench eval --input ./artifacts/desktop-starter.jsonl --json
+qita board --logdir ./runs
+```
+
+如果你想切到真实 benchmark adapter，而不是 starter pack，请改用 `--benchmark osworld`。

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from qitos.benchmark import TauBenchAdapter
+from examples.benchmarks.tau_bench_eval import run_tau_recipe_task as wrapper_run_tau_recipe_task
+from qitos.benchmark import TauBenchAdapter, resolve_builtin_runner
+from qitos.recipes.benchmarks.tau_bench import run_tau_recipe_task
 
 
 def test_tau_adapter_to_tasks_from_records():
@@ -51,3 +53,9 @@ def test_tau_adapter_load_records_without_external_dependency():
     rows = adapter.load_records()
     assert rows
     assert "instruction" in rows[0]
+
+
+def test_tau_bench_uses_builtin_runner_and_thin_example_wrapper():
+    runner = resolve_builtin_runner(benchmark="tau-bench", strategy="tau_smoke")
+    assert callable(runner)
+    assert wrapper_run_tau_recipe_task is run_tau_recipe_task

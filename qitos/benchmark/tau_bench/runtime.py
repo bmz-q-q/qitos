@@ -7,6 +7,9 @@ from hashlib import sha256
 from importlib import import_module
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
+from qitos.core import ExperimentSpec, RunSpec, Task as KernelTask
+
+from ..contracts import BenchmarkRuntimeHook, PreparedBenchmarkTask
 from qitos.benchmark.tau_bench.port.types import (
     Action,
     RESPOND_ACTION_FIELD_NAME,
@@ -274,3 +277,25 @@ def get_tau_runtime_env(
     return TauRuntimeEnv(
         env_name=env_name, task_split=task_split, task_index=task_index
     )
+
+
+@dataclass
+class TauBenchRuntimeHook(BenchmarkRuntimeHook):
+    env_name: str = "retail"
+    split: str = "test"
+
+    def prepare(
+        self, *, task: KernelTask, run_spec: RunSpec, experiment_spec: ExperimentSpec
+    ) -> PreparedBenchmarkTask:
+        metadata = {
+            "benchmark": "tau-bench",
+            "env_name": str(self.env_name),
+            "split": str(
+                experiment_spec.benchmark_split or run_spec.benchmark_split or self.split
+            ),
+            "task_index": int((task.metadata or {}).get("task_index", 0) or 0),
+            "reference_outputs": list(
+                (task.metadata or {}).get("reference_outputs") or []
+            ),
+        }
+        return PreparedBenchmarkTask(task=task, runtime_metadata=metadata)

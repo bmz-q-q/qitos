@@ -1,0 +1,26 @@
+---
+title: "在 qita 中检查 GUI Failure"
+description: "使用 qita 的 visual timeline 与 replay preview 理解 desktop run 为什么失败。"
+---
+
+# 在 qita 中检查 GUI Failure
+
+desktop 失败不能只看 parser。
+
+你需要回答：
+
+- 模型看到了什么
+- 它点击/输入了什么
+- grounding 是否存在
+- critic 是否拒绝了弱动作
+
+```bash
+qita replay --run ./runs/<run_id>
+```
+
+重点检查：
+
+- visual timeline
+- replay screenshot preview
+- action overlay
+- failure tags

@@ -1,0 +1,220 @@
+---
+title: "第三方 Benchmark 接入规范"
+description: "解释如何在不污染 framework kernel 的前提下，把新的 benchmark family 正式接入 QitOS。"
+---
+
+# 第三方 Benchmark 接入规范
+
+QitOS 现在把 benchmark integration 视为一套正式 SDK，而不是零散脚本。
+
+如果你要新增一个 benchmark family，默认结构应该是：
+
+- `qitos.benchmark.<family>`：数据集适配、runtime、evaluator、scorer、benchmark-native artifact
+- `qitos.recipes.*`：可复现 baseline method
+- `examples/*`：仅保留最薄的用户入口
+
+不要把 benchmark-specific 的 setup、scoring、dataset 逻辑塞进 `qitos/core`、`DesktopEnv` 或 example 文件。
+
+## 三层边界
+
+### Framework 层
+
+这些能力属于 framework：
+
+- `AgentModule + Engine`
+- `ActionSpace`
+- `EnvironmentAdapter`
+- `DesktopEnv`
+- provider-neutral tool / action vocabulary
+- family preset 与 harness ownership
+- qita replay、export、compare、screenshot timeline、overlay
+
+Framework 代码必须保持 benchmark-agnostic。
+
+### Benchmark 层
+
+这些能力应放在 `qitos.benchmark.<family>`：
+
+- 数据集读取与 split 逻辑
+- 稳定 sample identity
+- benchmark runtime `prepare/finalize`
+- benchmark-specific `setup` / `postconfig`
+- evaluator bridge
+- scorer 与 failure taxonomy
+- benchmark-native artifact payload
+
+凡是依赖 `test_all.json`、benchmark VM/bootstrap、upstream evaluator 语义的内容，都应该放在这里。
+
+### Recipe 层
+
+这些能力应放在 `qitos.recipes`：
+
+- canonical starter baseline
+- benchmark baseline
+- 可复现对比方法
+
+Recipe 应该能被这些入口共同复用：
+
+- `qit bench`
+- docs/tutorials
+- thin examples
+- 后续 benchmark report 脚本
+
+## 建议目录结构
+
+新增 benchmark family 时，建议至少包含：
+
+```text
+qitos/benchmark/<family>/
+├── __init__.py
+├── adapter.py
+├── runtime.py
+├── evaluator.py
+├── scorer.py
+└── runner.py
+```
+
+如果该 benchmark 有 canonical baseline，再新增：
+
+```text
+qitos/recipes/benchmarks/<family>.py
+```
+
+## Adapter 契约
+
+Adapter 负责：
+
+- dataset root 解析
+- record loading
+- split / subset 过滤
+- 稳定 task/sample identity
+- task metadata 归一化
+
+每个 task 都应携带足够 metadata，支持：
+
+- benchmark-native evaluation
+- qita inspection
+- 可复现结果导出
+
+最低要求至少包含：
+
+- `benchmark`
+- `split`
+- 稳定 sample identity，例如 `task_id` 或 `example_id`
+- runtime / evaluator 所需的 benchmark-native metadata
+
+## Runtime hook 契约
+
+当 benchmark 需要这些能力时，请使用 `BenchmarkRuntimeHook`：
+
+- 环境 prepare / finalize
+- agent 动作前的 benchmark-specific setup
+- bootstrap metadata
+- cleanup policy
+
+典型例子：
+
+- OSWorld 的 qcow2/bootstrap 与 controller readiness
+- benchmark-specific sandbox setup
+- 服务 warmup 或结束清理
+
+除非逻辑确实能被多个 benchmark family 复用，否则不要把它推回 `DesktopEnv` 或全局 engine。
+
+## Evaluator 与 Scorer 契约
+
+`BenchmarkEvaluator` 用来产生 benchmark-native payload，例如：
+
+- upstream evaluator bridge 结果
+- benchmark-native score JSON
+- postconfig 执行结果
+
+`BenchmarkScorer` 负责把这些结果映射回标准公开行：
+
+- `success`
+- `stop_reason`
+- `steps`
+- `latency_seconds`
+- `token_usage`
+- `cost`
+- benchmark-specific metadata
+
+对外公开结果仍然必须是 `BenchmarkRunResult`，不要再造第二套 public row schema。
+
+## 标准结果行要求
+
+每个 benchmark 运行最终都应输出统一 public row：
+
+- `task_id`
+- `benchmark`
+- `split`
+- `prediction`
+- `success`
+- `stop_reason`
+- `steps`
+- `latency_seconds`
+- `token_usage`
+- `cost`
+- `trace_run_dir`
+- `run_spec_ref`
+
+benchmark-native 的附加信息请放在 `metadata`，不要破坏共享结果契约。
+
+## Trace 与 qita 兼容要求
+
+新的 benchmark family 必须保留：
+
+- `RunSpec`
+- `ExperimentSpec`
+- trace directory 兼容性
+- qita replay / export / compare
+
+如果新增 benchmark-native artifact，也要确保它仍能和这些共享产物一起工作：
+
+- `manifest.json`
+- `events.jsonl`
+- `steps.jsonl`
+
+原则是：benchmark 可以补充细节，但不能破坏共享 run contract。
+
+## CLI 与注册要求
+
+要把 benchmark family 变成正式入口，需要完成：
+
+1. 在 `qitos.benchmark` 中导出 family
+2. 在 `qitos.benchmark.runner` 中注册 task loading 与 builtin runner
+3. 确保它能通过以下入口运行：
+   - `qit bench run`
+   - `qit bench eval`
+   - `qit bench replay`
+   - `qit bench export`
+
+examples 可以保留，但只能作为 recipe / runner 的薄包装。
+
+## 文档同步清单
+
+新增 benchmark family 时，至少同步这些文档面：
+
+- benchmark overview
+- benchmark family 页面
+- CLI reference（如果 benchmark 名称或 strategy 变了）
+- contributor guide（如果引入了新的 runtime/evaluator 模式）
+- `CHANGELOG.md`
+- README 的 progress/news（只要是用户可见能力）
+
+这些更新属于实现的一部分，不是事后补写。
+
+## 当前仓库中的参考实现
+
+可以直接参考这些 canonical 结构：
+
+- `qitos.benchmark.desktop`
+- `qitos.benchmark.osworld`
+- `qitos.benchmark.gaia`
+- `qitos.benchmark.tau_bench`
+- `qitos.benchmark.cybench`
+- `qitos.recipes.desktop.osworld_starter`
+- `qitos.recipes.benchmarks.gaia`
+- `qitos.recipes.benchmarks.tau_bench`
+- `qitos.recipes.benchmarks.cybench`
+
+未来的新 benchmark integration 应尽量对齐这些形态。

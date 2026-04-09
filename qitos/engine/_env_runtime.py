@@ -306,7 +306,12 @@ class _EnvRuntime(Generic[StateT, ObservationT, ActionT]):
                 metadata = dict(config.get("metadata") or {})
                 if provider == "container":
                     container = str(config.get("container") or "").strip()
-                    if not container:
+                    controller_endpoint = str(
+                        config.get("controller_endpoint")
+                        or metadata.get("controller_endpoint")
+                        or ""
+                    ).strip()
+                    if not container and not controller_endpoint:
                         return None
                     return DesktopEnv.from_container(
                         container=container,
@@ -324,6 +329,7 @@ class _EnvRuntime(Generic[StateT, ObservationT, ActionT]):
                         ocr=ocr,
                         ui_candidates=ui_candidates,
                         screen_size=screen_size,
+                        controller_endpoint=controller_endpoint,
                         metadata=metadata,
                     )
                 return DesktopEnv.from_mock(

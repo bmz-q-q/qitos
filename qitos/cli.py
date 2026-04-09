@@ -11,7 +11,9 @@ from qitos.benchmark import (
     build_experiment_spec,
     evaluate_benchmark_results,
     load_benchmark_tasks,
+    normalize_benchmark_name,
     read_benchmark_results,
+    resolve_builtin_runner,
     resolve_runner,
     run_benchmark_tasks,
     write_benchmark_results,
@@ -114,6 +116,8 @@ def _bench_main(argv: list[str]) -> int:
     p_run.add_argument("--trace-schema-version", default="v1")
     p_run.add_argument("--trace-logdir", default="./runs")
     p_run.add_argument("--seed", type=int)
+    p_run.add_argument("--base-url")
+    p_run.add_argument("--api-key")
 
     p_eval = sub.add_parser("eval", help="Aggregate benchmark results")
     p_eval.add_argument("--input", required=True)
@@ -142,8 +146,9 @@ def _bench_main(argv: list[str]) -> int:
 
 
 def _bench_run(args: argparse.Namespace) -> int:
+    benchmark = normalize_benchmark_name(args.benchmark)
     tasks = load_benchmark_tasks(
-        benchmark=args.benchmark,
+        benchmark=benchmark,
         split=args.split,
         limit=args.limit,
         subset=args.subset,
@@ -154,25 +159,35 @@ def _bench_run(args: argparse.Namespace) -> int:
         prompt_protocol=args.prompt_protocol,
         parser_name=args.parser_name,
         trace_schema_version=args.trace_schema_version,
-        benchmark_name=args.benchmark,
+        benchmark_name=benchmark,
         benchmark_split=args.split,
-        environment={"trace_logdir": str(args.trace_logdir)},
+        environment={
+            "trace_logdir": str(args.trace_logdir),
+            "base_url": str(args.base_url or ""),
+        },
         seed=args.seed,
-        metadata={"subset": args.subset},
+        metadata={
+            "subset": args.subset,
+            "api_key_present": bool(str(args.api_key or "").strip()),
+            "benchmark_alias": str(args.benchmark),
+        },
     )
     if args.model_family:
         run_spec.model_family = args.model_family
     experiment_spec = build_experiment_spec(
-        benchmark=args.benchmark,
+        benchmark=benchmark,
         split=args.split,
         subset=args.subset,
         limit=args.limit,
         run_spec=run_spec,
     )
-    runner = resolve_runner(args.runner)
+    runner = resolve_runner(args.runner) or resolve_builtin_runner(
+        benchmark=benchmark,
+        strategy=str(args.strategy),
+    )
     rows = run_benchmark_tasks(
         tasks=tasks,
-        benchmark=args.benchmark,
+        benchmark=benchmark,
         split=args.split,
         run_spec=run_spec,
         experiment_spec=experiment_spec,

@@ -154,6 +154,7 @@ class CyBenchAdapter(BenchmarkAdapter):
             "task_dir": task_dir,
             "guided": guided,
             "target_host": str(meta.get("target_host") or ""),
+            "task_index": idx,
         }
         if self.include_raw_record:
             metadata["raw_record"] = rec

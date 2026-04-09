@@ -1,6 +1,6 @@
 ---
 title: "Benchmarks"
-description: "Run GAIA, Tau-Bench, and CyBench through one official QitOS benchmark path with normalized outputs and trace artifacts."
+description: "Run desktop-starter, OSWorld, GAIA, Tau-Bench, and CyBench through one official QitOS benchmark path with normalized outputs and trace artifacts."
 ---
 
 QitOS treats benchmark work as part of the same runtime story as normal agent runs.
@@ -18,6 +18,8 @@ That means benchmark execution, replay, export, and result aggregation all sit o
 
 | Benchmark | Domain | Primary metric |
 | --- | --- | --- |
+| [Desktop Starter](/benchmarks/desktop-starter) | Computer use starter baseline | Success / failure taxonomy |
+| [OSWorld](/benchmarks/osworld) | Desktop / computer-use benchmark adapter | OSWorld evaluator score |
 | [GAIA](/benchmarks/gaia) | General AI assistant tasks | Exact match |
 | [Tau-Bench](/benchmarks/tau-bench) | Tool-agent-user interaction | Reward / pass^k |
 | [CyBench](/benchmarks/cybench) | CTF-style security evaluation | Guided subtask score |
@@ -35,6 +37,14 @@ qit bench export ...
 
 The scripts under `examples/benchmarks/` still exist, but in v0.3 they are thin wrappers over the same result and trace contract.
 
+QitOS now also keeps benchmark work in three explicit layers:
+
+- framework: shared runtime, env, harness, and qita capabilities
+- benchmark: dataset/runtime/evaluator/scorer integration under `qitos.benchmark.*`
+- recipe: reproducible baseline methods under `qitos.recipes.*`
+
+That split is what lets starter benchmarks, real benchmark adapters, and reusable baselines coexist without leaking into `examples/`.
+
 ## Why this matters
 
 Because all benchmark outputs share one shape, you can:
@@ -43,6 +53,7 @@ Because all benchmark outputs share one shape, you can:
 - aggregate summary metrics without per-benchmark glue code
 - use the same replay and export surface everywhere
 - reason about benchmark regressions with the same qita workflow as normal runs
+- keep starter benchmarks and real benchmark adapters separate without changing the artifact contract
 
 ## What a benchmark run produces
 
@@ -88,5 +99,7 @@ qita board --logdir ./runs
 ## Related reading
 
 - [Official runs](/concepts/official-runs)
+- [Benchmarks and recipes](/guides/benchmarks-and-recipes)
+- [Third-party benchmark integration](/guides/third-party-benchmark-integration)
 - [CLI reference](/reference/cli)
 - [Reproducible benchmark runs](/tutorials/reproducible-benchmark-runs)

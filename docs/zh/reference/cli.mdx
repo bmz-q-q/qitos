@@ -91,6 +91,19 @@ qit bench run \
 - 构造 `RunSpec` 与 `ExperimentSpec`
 - 输出统一的 `BenchmarkRunResult`
 
+现在常见的 benchmark name 包括：
+
+- `desktop-starter`：canonical starter benchmark family
+- `osworld`：benchmark-specific OSWorld adapter path
+- `gaia`、`tau-bench`、`cybench`：已经迁入 `qitos.benchmark.*` 的 benchmark families
+- `desktop`：`desktop-starter` 的兼容 alias
+
+当前 CLI 默认遵循三层结构：
+
+- `qitos.benchmark.*`：benchmark adapter / evaluator
+- `qitos.recipes.*`：canonical baseline method
+- `examples/*`：最薄的入口包装
+
 ### `qit bench eval`
 
 ```bash

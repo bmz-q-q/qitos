@@ -1,0 +1,61 @@
+---
+title: "Inspect a GUI Failure in qita"
+description: "Use qita's visual timeline and replay preview to understand a failed desktop run."
+---
+
+# Inspect a GUI Failure in qita
+
+Desktop failures are usually not “just parser failures”.
+
+You need to answer:
+
+- what the model saw
+- what it tried to click or type
+- whether grounding existed
+- whether the critic rejected a weak action
+
+## Open the run
+
+```bash
+qita replay --run ./runs/<run_id>
+```
+
+Or open the board and click into the run:
+
+```bash
+qita board --logdir ./runs
+```
+
+## What to inspect first
+
+### 1. Visual timeline
+
+Check the screenshot timeline first.
+
+It tells you:
+
+- which steps had screenshots
+- which action each step took
+- whether grounding metadata existed
+- how many critic retries happened
+
+### 2. Replay preview
+
+In replay mode, inspect the screenshot preview and overlay:
+
+- the screenshot itself
+- the action point or overlay box
+- the step phase currently being replayed
+
+### 3. Failure tags
+
+Then look at benchmark output / manifest summaries and ask which bucket fits best:
+
+- `perception_failure`
+- `grounding_failure`
+- `planning_failure`
+- `action_selection_failure`
+- `execution_environment_failure`
+- `stop_completion_failure`
+
+This keeps GUI debugging tied to a benchmark-grade taxonomy instead of “the model looked wrong”.

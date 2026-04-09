@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import time
 import subprocess
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional
 
+import requests
+
 from qitos.core.multimodal import guess_mime_type
 
-from .actions import action_result_payload, normalize_gui_action
+from .actions import action_result_payload, normalize_gui_action, to_osworld_action
 
 
 class DesktopProvider(ABC):
@@ -111,6 +114,7 @@ class MockDesktopProvider(DesktopProvider):
         return action_result_payload(
             action=normalized,
             status="success",
+            execution_state="executed",
             message=message,
             provider=self.name,
             metadata={"screen_size": list(self.screen_size)},
@@ -136,6 +140,7 @@ class ContainerDesktopProvider(DesktopProvider):
         container: str,
         screenshot_path: str,
         workspace_root: str = "/workspace",
+        controller_endpoint: str = "",
         instruction: str = "",
         accessibility_tree: Any = None,
         terminal: str = "",
@@ -148,6 +153,7 @@ class ContainerDesktopProvider(DesktopProvider):
         self.container = str(container or "").strip()
         self.workspace_root = str(workspace_root or "/workspace")
         self.screenshot_path = str(Path(screenshot_path).expanduser().resolve())
+        self.controller_endpoint = str(controller_endpoint or "").strip()
         self.instruction = str(instruction or "")
         self.accessibility_tree = accessibility_tree
         self.terminal = str(terminal or "")
@@ -160,13 +166,13 @@ class ContainerDesktopProvider(DesktopProvider):
         self.started = False
 
     def start(self) -> None:
-        self._ensure_container_exists()
+        self._ensure_runtime_available()
         self.started = True
 
     def reset(self, task: Any = None, workspace: Optional[str] = None) -> None:
         _ = task
         _ = workspace
-        self._ensure_container_exists()
+        self._ensure_runtime_available()
         self.actions = []
         self.started = True
 
@@ -174,21 +180,23 @@ class ContainerDesktopProvider(DesktopProvider):
         self.started = False
 
     def capture_state(self) -> Dict[str, Any]:
+        remote_state = self._capture_remote_state()
         return {
             "screenshot": {
                 "path": self.screenshot_path,
                 "mime_type": guess_mime_type(self.screenshot_path),
                 "detail": "original",
             },
-            "accessibility_tree": self.accessibility_tree,
-            "terminal": self.terminal,
-            "dom": self.dom,
-            "ocr": list(self.ocr),
-            "ui_candidates": list(self.ui_candidates),
+            "accessibility_tree": remote_state.get("accessibility_tree", self.accessibility_tree),
+            "terminal": str(remote_state.get("terminal") or self.terminal),
+            "dom": remote_state.get("dom", self.dom),
+            "ocr": list(remote_state.get("ocr") or self.ocr),
+            "ui_candidates": list(remote_state.get("ui_candidates") or self.ui_candidates),
             "instruction": self.instruction,
             "screen_size": {"width": int(self.screen_size[0]), "height": int(self.screen_size[1])},
             "metadata": {
                 "container": self.container,
+                "controller_endpoint": self._effective_controller_endpoint(),
                 "workspace_root": self.workspace_root,
                 **dict(self.metadata),
             },
@@ -199,45 +207,162 @@ class ContainerDesktopProvider(DesktopProvider):
         _ = state
         normalized = normalize_gui_action(action)
         self.actions.append(normalized)
+        endpoint = self._effective_controller_endpoint()
+        if endpoint:
+            try:
+                resp = requests.post(
+                    f"{endpoint.rstrip('/')}/execute",
+                    json=to_osworld_action(normalized),
+                    timeout=60,
+                )
+                success = int(resp.status_code) == 200
+                return action_result_payload(
+                    action=normalized,
+                    status="success" if success else "error",
+                    execution_state="executed" if success else "failed",
+                    message=(resp.text or "")[:600],
+                    provider=self.name,
+                    metadata={
+                        "container": self.container,
+                        "workspace_root": self.workspace_root,
+                        "controller_endpoint": endpoint,
+                        "status_code": int(resp.status_code),
+                    },
+                )
+            except Exception as exc:
+                return action_result_payload(
+                    action=normalized,
+                    status="error",
+                    execution_state="failed",
+                    message=str(exc),
+                    provider=self.name,
+                    metadata={
+                        "container": self.container,
+                        "workspace_root": self.workspace_root,
+                        "controller_endpoint": endpoint,
+                    },
+                )
         return action_result_payload(
             action=normalized,
             status="accepted",
+            execution_state="accepted",
             message=f"Queued {normalized['action_type']} for container desktop runtime.",
             provider=self.name,
-            metadata={"container": self.container, "workspace_root": self.workspace_root},
+            metadata={
+                "container": self.container,
+                "workspace_root": self.workspace_root,
+                "controller_endpoint": endpoint,
+            },
         )
 
     def health_check(self) -> Dict[str, Any]:
-        if not self.container:
-            return {"ok": False, "message": "container is empty", "provider": self.name}
-        try:
-            proc = subprocess.run(
-                ["docker", "inspect", self.container],
-                capture_output=True,
-                text=True,
-                timeout=20,
-            )
-        except Exception as exc:
-            return {"ok": False, "message": str(exc), "provider": self.name}
-        if proc.returncode != 0:
-            return {
-                "ok": False,
-                "message": "docker inspect failed",
-                "stderr": proc.stderr,
-                "provider": self.name,
-                "container": self.container,
-            }
+        endpoint = self._effective_controller_endpoint()
+        if not self.container and not endpoint:
+            return {"ok": False, "message": "container and controller endpoint are both empty", "provider": self.name}
+        if self.container:
+            try:
+                proc = subprocess.run(
+                    ["docker", "inspect", self.container],
+                    capture_output=True,
+                    text=True,
+                    timeout=20,
+                )
+            except Exception as exc:
+                return {"ok": False, "message": str(exc), "provider": self.name}
+            if proc.returncode != 0:
+                return {
+                    "ok": False,
+                    "message": "docker inspect failed",
+                    "stderr": proc.stderr,
+                    "provider": self.name,
+                    "container": self.container,
+                }
+        if endpoint:
+            try:
+                screenshot = requests.get(f"{endpoint.rstrip('/')}/screenshot", timeout=15)
+                endpoint_ok = bool(screenshot.status_code == 200)
+            except Exception as exc:
+                return {
+                    "ok": False,
+                    "message": str(exc),
+                    "provider": self.name,
+                    "container": self.container,
+                    "controller_endpoint": endpoint,
+                }
+            if not endpoint_ok:
+                return {
+                    "ok": False,
+                    "message": "controller screenshot probe failed",
+                    "provider": self.name,
+                    "container": self.container,
+                    "controller_endpoint": endpoint,
+                    "status_code": int(screenshot.status_code),
+                }
         return {
             "ok": True,
             "provider": self.name,
             "container": self.container,
+            "controller_endpoint": endpoint,
             "workspace_root": self.workspace_root,
         }
 
-    def _ensure_container_exists(self) -> None:
+    def _ensure_runtime_available(self) -> None:
         health = self.health_check()
         if not bool(health.get("ok", False)):
             raise RuntimeError(str(health.get("message", "container desktop provider unavailable")))
+
+    def _effective_controller_endpoint(self) -> str:
+        endpoint = self.controller_endpoint
+        if endpoint:
+            return endpoint
+        return str(self.metadata.get("controller_endpoint") or "").strip()
+
+    def _capture_remote_state(self) -> Dict[str, Any]:
+        endpoint = self._effective_controller_endpoint()
+        if not endpoint:
+            return {}
+
+        state: Dict[str, Any] = {}
+        screenshot_url = f"{endpoint.rstrip('/')}/screenshot"
+        try:
+            resp = requests.get(screenshot_url, timeout=20)
+            if resp.status_code == 200 and resp.content:
+                target = Path(self.screenshot_path)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(resp.content)
+                state["screenshot_bytes"] = len(resp.content)
+        except Exception as exc:
+            state["screenshot_error"] = str(exc)
+
+        for key, route in (
+            ("accessibility_tree", "/accessibility"),
+            ("terminal", "/terminal"),
+        ):
+            try:
+                resp = requests.get(f"{endpoint.rstrip('/')}{route}", timeout=20)
+                if resp.status_code != 200:
+                    continue
+                payload = resp.json() if "application/json" in str(resp.headers.get("content-type") or "") else {}
+                if key == "accessibility_tree":
+                    state[key] = payload.get("AT") or payload.get("accessibility_tree") or payload
+                else:
+                    state[key] = payload.get("output") or payload.get("terminal") or payload
+            except Exception as exc:
+                state[f"{key}_error"] = str(exc)
+
+        try:
+            resp = requests.get(f"{endpoint.rstrip('/')}/observation", timeout=20)
+            if resp.status_code == 200:
+                payload = resp.json() if "application/json" in str(resp.headers.get("content-type") or "") else {}
+                if isinstance(payload, Mapping):
+                    for key in ("dom", "ocr", "ui_candidates", "screen_size"):
+                        if key in payload:
+                            state[key] = payload.get(key)
+        except Exception:
+            pass
+
+        state["captured_at"] = time.time()
+        return state
 
 
 __all__ = [

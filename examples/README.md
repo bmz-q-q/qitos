@@ -13,7 +13,7 @@ StateSchema -> prepare -> Engine/Model decide -> tool/env -> reduce -> trace/qit
 - `examples/quickstart/`: the smallest runnable coding agent
 - `examples/patterns/`: one design axis per example (`react`, `planact`, `reflexion`, `tot`)
 - `examples/real/`: practical single-task agents that still follow the canonical authoring path
-- `examples/benchmarks/`: operational runners for GAIA, Tau-Bench, and CyBench
+- `examples/benchmarks/`: thin operational entrypoints that call the canonical `qitos.recipes` + `qitos.benchmark` layers
 
 ## What stays consistent
 
@@ -81,8 +81,11 @@ python examples/real/react_compact_agent.py
 
 ## Benchmark runners
 
-Benchmark/eval runners live under `examples/benchmarks/`.
-They are intentionally more operational and may keep benchmark loops, resume logic, JSONL export, and concurrency.
+Benchmark/eval entrypoints live under `examples/benchmarks/`.
+They are now intentionally thin wrappers over the canonical recipe and benchmark-family code in:
+
+- `qitos.benchmark.*`
+- `qitos.recipes.benchmarks.*`
 
 ```bash
 python examples/benchmarks/gaia_eval.py --help
@@ -131,7 +134,9 @@ python examples/real/claude_code_agent.py \
 - `examples/real/epub_reader_agent.py` expects a local EPUB at `./playground/epub_reader_agent/book.epub`.
 - `examples/real/code_security_audit_agent.py` shows the new composition-first path: pass `toolset=[...]` and let QiTOS flatten `SecurityAuditToolSet + CodingToolSet + TaskToolSet` automatically.
 - `examples/real/react_compact_agent.py` shows the smallest opt-in path for `CompactHistory`: keep the same agent shape and only swap the history preset.
-- `examples/real/openai_cua_agent.py` is the OSWorld-inspired desktop/computer-use reference path on the QitOS kernel: OpenAI-compatible multimodal screenshots in, provider-neutral GUI actions out.
+- `examples/real/openai_cua_agent.py` is now a thin public entrypoint for the canonical desktop recipe in `/Users/morinop/coding/yoga_framework/qitos/recipes/desktop/osworld_starter.py`.
+- `qitos/recipes/desktop/osworld_starter.py` is the real reusable baseline method: examples, benchmark runners, and docs now share this one implementation.
+- `examples/benchmarks/*.py` no longer own canonical benchmark logic; GAIA, Tau-Bench, and CyBench now route through `qitos.benchmark` families plus `qitos.recipes.benchmarks` baselines.
 - `examples/real/desktop_env_smoke.py` is the smallest deterministic loop for `DesktopEnv + computer_use_tools()`.
 - `examples/real/research_harness_agent.py` is the bare research-first authoring path: handwritten system prompt, parser, protocol, transport, and manual tool surface.
 - `examples/real/claude_code_agent.py` is the fuller Claude Code-style coding example and now doubles as the v0.4 multi-family preset showcase, including the Qwen native tool-call lane.

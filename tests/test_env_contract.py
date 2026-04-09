@@ -115,3 +115,19 @@ def test_desktop_env_mock_provider_supports_gui_loop(tmp_path: Path) -> None:
     assert step.observation.data["desktop"]["provider"] == "mock_desktop"
     assert step.info["performed_actions"]
     env.teardown()
+
+
+def test_desktop_env_rejects_invalid_pointer_action(tmp_path: Path) -> None:
+    png_path = tmp_path / "desktop.png"
+    png_path.write_bytes(
+        b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x04\x00\x00\x00\xb5\x1c\x0c\x02\x00\x00\x00\x0bIDATx\xdac\xfc\xff\x1f\x00\x02\xeb\x01\xf5i\xf6\x81\xb7\x00\x00\x00\x00IEND\xaeB`\x82"
+    )
+    env = DesktopEnv.from_mock(screenshot_path=str(png_path), instruction="Click Continue")
+    env.setup()
+    env.reset()
+    step = env.step({"decision_mode": "act", "actions": [{"name": "click", "args": {}}]})
+    performed = step.info["performed_actions"]
+    assert performed[0]["status"] == "validation_error"
+    assert performed[0]["execution_state"] == "failed"
+    assert step.info["validation_errors"]
+    env.teardown()

@@ -406,9 +406,10 @@ class AgentModule(ABC, Generic[StateT, ObservationT, ActionT]):
         if render_hooks:
             render_list.extend(render_hooks)
 
+        task_has_env_spec = isinstance(task, Task) and task.env_spec is not None
         if env is not None:
             kwargs["env"] = env
-        elif workspace is not None and "env" not in kwargs:
+        elif workspace is not None and "env" not in kwargs and not task_has_env_spec:
             try:
                 from ..kit.env import HostEnv
 

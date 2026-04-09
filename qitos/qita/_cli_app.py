@@ -383,6 +383,7 @@ def _load_run_payload(run_dir: Path) -> Dict[str, Any]:
         "events": events,
         "steps": steps,
         "events_by_step": grouped_events,
+        "visual_timeline": _build_visual_timeline(steps),
     }
 
 
@@ -497,6 +498,59 @@ def _config_snapshot(payload: Dict[str, Any]) -> Dict[str, Any]:
         "run_meta": run_meta,
     }
     return _flatten_dict(snapshot)
+
+
+def _step_action_label(step: Dict[str, Any]) -> str:
+    actions = list(step.get("actions") or [])
+    if not actions:
+        return ""
+    action = actions[0] or {}
+    tool = str(action.get("tool") or action.get("name") or action.get("action") or "")
+    args = dict(action.get("args") or {}) if isinstance(action, dict) else {}
+    for key in ("text", "path", "command", "reason"):
+        if key in args:
+            return f"{tool}({str(args.get(key))[:60]})"
+    return tool
+
+
+def _build_visual_timeline(steps: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    timeline: List[Dict[str, Any]] = []
+    for step in steps:
+        assets = list(step.get("visual_assets") or [])
+        screenshot = None
+        for asset in assets:
+            if isinstance(asset, dict) and str(asset.get("kind") or "") == "screenshot":
+                screenshot = dict(asset)
+                break
+        multimodal = {}
+        observation = step.get("observation")
+        if isinstance(observation, dict):
+            env = observation.get("env")
+            if isinstance(env, dict):
+                env_observation = env.get("observation")
+                if isinstance(env_observation, dict):
+                    data = env_observation.get("data")
+                    if isinstance(data, dict) and isinstance(data.get("multimodal"), dict):
+                        multimodal = dict(data.get("multimodal") or {})
+        grounding = multimodal.get("grounding_metadata")
+        critic_outputs = list(step.get("critic_outputs") or [])
+        retry_count = sum(
+            1
+            for item in critic_outputs
+            if isinstance(item, dict) and str(item.get("action") or "") == "retry"
+        )
+        timeline.append(
+            {
+                "step_id": step.get("step_id"),
+                "screenshot": screenshot,
+                "action_label": _step_action_label(step),
+                "grounding_present": bool(grounding),
+                "grounding_metadata": grounding if isinstance(grounding, dict) else {},
+                "critic_retry_count": retry_count,
+                "visual_asset_count": step.get("visual_asset_count", 0),
+            }
+        )
+    return timeline
 
 
 def _build_run_diff(left: Dict[str, Any], right: Dict[str, Any]) -> Dict[str, Any]:
@@ -927,6 +981,13 @@ def _render_run_html(payload: Dict[str, Any], embedded: bool) -> str:
 .ov .k{{font-size:11px;color:#91a8d6;text-transform:uppercase;letter-spacing:.3px}}
 .ov .v{{font-size:14px;color:#e7f0ff;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}
 .timeline{{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px;margin:0 0 12px}}
+.vtimeline{{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:10px}}
+.vcard{{background:#0b1220;border:1px solid #1c2b44;border-radius:10px;padding:8px}}
+.vthumb{{position:relative;border:1px solid #243657;border-radius:8px;overflow:hidden;background:#081021;min-height:110px;display:flex;align-items:center;justify-content:center}}
+.vthumb img{{max-width:100%;display:block}}
+.voverlay{{position:absolute;inset:0;pointer-events:none}}
+.vdot{{position:absolute;width:12px;height:12px;border-radius:999px;background:rgba(255,107,107,.85);border:2px solid #fff;transform:translate(-50%,-50%)}}
+.vbox{{position:absolute;border:2px solid rgba(80,182,255,.9);background:rgba(80,182,255,.08);border-radius:4px}}
 .trow{{display:grid;grid-template-columns:82px 1fr 64px;gap:8px;align-items:center;margin:6px 0}}
 .tlabel{{font-size:12px;color:#9fb2d8}}
 .track{{height:16px;background:#0b1220;border:1px solid #1c2b44;border-radius:999px;overflow:hidden;position:relative}}
@@ -1007,6 +1068,10 @@ pre{{margin:0;background:#0b1220;border:1px solid #1c2b44;padding:10px;border-ra
           <button class="btn" id="fontUp" type="button">A+</button>
         </div>
         <section class="timeline">
+          <h4>visual timeline</h4>
+          <div id="visualTimeline"></div>
+        </section>
+        <section class="timeline">
           <h4>phase timeline (gantt-like)</h4>
           <div id="timeline"></div>
         </section>
@@ -1035,6 +1100,7 @@ const eventsByStep = payload.events_by_step || {{}};
 const flow = document.getElementById('flow');
 const toc = document.getElementById('toc');
 const timelineRoot = document.getElementById('timeline');
+const visualTimelineRoot = document.getElementById('visualTimeline');
 const contextTimelineRoot = document.getElementById('contextTimeline');
 const parserTimelineRoot = document.getElementById('parserTimeline');
 const overview = document.getElementById('overview');
@@ -1286,6 +1352,65 @@ function assetHref(path){{
   if(embedded) return '';
   return '/asset?path=' + encodeURIComponent(String(path));
 }}
+function renderVisualOverlay(item){{
+  if(!item || typeof item !== 'object') return '';
+  const parts = [];
+  const grounding = (item.grounding_metadata && typeof item.grounding_metadata === 'object') ? item.grounding_metadata : {{}};
+  const boxes = Array.isArray(grounding.boxes) ? grounding.boxes : [];
+  for(const box of boxes.slice(0,6)){{
+    if(!box || typeof box !== 'object') continue;
+    const x = Number(box.x !== undefined ? box.x : (Array.isArray(box.bounds) ? box.bounds[0] : 0));
+    const y = Number(box.y !== undefined ? box.y : (Array.isArray(box.bounds) ? box.bounds[1] : 0));
+    const w = Number(box.width !== undefined ? box.width : (Array.isArray(box.bounds) ? (box.bounds[2] - box.bounds[0]) : 0));
+    const h = Number(box.height !== undefined ? box.height : (Array.isArray(box.bounds) ? (box.bounds[3] - box.bounds[1]) : 0));
+    if(!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(w) || !Number.isFinite(h)) continue;
+    parts.push('<div class="vbox" style="left:' + x + 'px;top:' + y + 'px;width:' + w + 'px;height:' + h + 'px"></div>');
+  }}
+  const actionLabel = String(item.action_label || '');
+  const matched = actionLabel.match(/\\b(click|move_to|double_click|right_click|drag_to)\\((.*?)\\)/);
+  if(matched){{
+    const step = Array.isArray(payload.steps) ? payload.steps.find(function(st){{ return String(st.step_id) === String(item.step_id); }}) : null;
+    const actions = step && Array.isArray(step.actions) ? step.actions : [];
+    if(actions.length){{
+      const args = (actions[0] && typeof actions[0] === 'object' && typeof actions[0].args === 'object') ? actions[0].args : {{}};
+      const x = Number(args.x);
+      const y = Number(args.y);
+      if(Number.isFinite(x) && Number.isFinite(y)){{
+        parts.push('<div class="vdot" style="left:' + x + 'px;top:' + y + 'px"></div>');
+      }}
+    }}
+  }}
+  return parts.length ? ('<div class="voverlay">' + parts.join('') + '</div>') : '';
+}}
+function buildVisualTimeline(items){{
+  const rows = Array.isArray(payload.visual_timeline) ? payload.visual_timeline : [];
+  if(!rows.length){{
+    visualTimelineRoot.innerHTML = '<div class="muted">No screenshot timeline recorded.</div>';
+    return;
+  }}
+  const cards = [];
+  for(const item of rows){{
+    const shot = (item && typeof item === 'object') ? item.screenshot : null;
+    const path = shot && typeof shot === 'object' ? String(shot.path || '') : '';
+    let preview = '<div class="muted">No screenshot</div>';
+    if(path && !embedded){{
+      preview = '<div class="vthumb"><img src="' + esc(assetHref(path)) + '" alt="screenshot step ' + esc(String(item.step_id)) + '"/>' + renderVisualOverlay(item) + '</div>';
+    }}
+    cards.push(
+      '<div class="vcard">' +
+      '<div style="font-size:11px;color:#9fb2d8;margin-bottom:6px">STEP ' + esc(String(item.step_id)) + '</div>' +
+      preview +
+      kvBlock([
+        kvRow('action', item.action_label || '-'),
+        kvRow('grounding', item.grounding_present ? 'yes' : 'no'),
+        kvRow('critic retries', item.critic_retry_count || 0),
+        kvRow('visual assets', item.visual_asset_count || 0),
+      ]) +
+      '</div>'
+    );
+  }}
+  visualTimelineRoot.innerHTML = '<div class="vtimeline">' + cards.join('') + '</div>';
+}}
 function renderVisualAssets(step){{
   const st = (step && typeof step === 'object') ? step : {{}};
   const assets = Array.isArray(st.visual_assets) ? st.visual_assets : [];
@@ -1296,6 +1421,13 @@ function renderVisualAssets(step){{
   if(inputModalities.length) headerRows.push(kvRow('model input modalities', inputModalities.join(', ')));
   if(st.model_input_visual_count !== undefined) headerRows.push(kvRow('model input images', st.model_input_visual_count));
   if(st.visual_asset_count !== undefined) headerRows.push(kvRow('visual assets', st.visual_asset_count));
+  const multimodal = (((st.observation || {{}}).env || {{}}).observation || {{}}).data || {{}};
+  const grounding = multimodal.multimodal && multimodal.multimodal.grounding_metadata;
+  headerRows.push(kvRow('grounding metadata', grounding ? 'present' : 'none'));
+  const retryCount = Array.isArray(st.critic_outputs) ? st.critic_outputs.filter(function(x){{ return x && typeof x === 'object' && x.action === 'retry'; }}).length : 0;
+  headerRows.push(kvRow('critic retries', retryCount));
+  const label = firstActionLabel(st.actions || []);
+  if(label) headerRows.push(kvRow('action taken', label));
   let htmlBlocks = headerRows.length ? kvBlock(headerRows) : '';
   if(!assets.length){{
     return htmlBlocks || '<div class="muted">No visual assets recorded.</div>';
@@ -1308,7 +1440,8 @@ function renderVisualAssets(step){{
     const imageLike = mime.startsWith('image/');
     let preview = '';
     if(imageLike && !embedded && path){{
-      preview = '<div style="margin-top:8px"><img src="' + esc(assetHref(path)) + '" alt="visual asset" style="max-width:100%;border:1px solid #1c2b44;border-radius:8px;background:#0b1220"/></div>';
+      const timelineItem = (Array.isArray(payload.visual_timeline) ? payload.visual_timeline.find(function(it){{ return String(it.step_id) === String(st.step_id); }}) : null) || {{}};
+      preview = '<div class="vthumb" style="margin-top:8px"><img src="' + esc(assetHref(path)) + '" alt="visual asset"/>' + renderVisualOverlay(timelineItem) + '</div>';
     }} else if(path) {{
       preview = '<div style="margin-top:8px"><pre>' + esc(String(path)) + '</pre></div>';
     }}
@@ -1719,6 +1852,7 @@ function render(){{
   if(q) items = items.filter(function(it){{ return cardText(it.step,it.events).includes(q); }});
   items.sort(function(a,b){{ return sort==='desc' ? Number(b.sid)-Number(a.sid) : Number(a.sid)-Number(b.sid); }});
   paintOverview(items);
+  buildVisualTimeline(items);
   buildTimeline(items);
   buildContextTimeline(items);
   buildParserTimeline(items);
@@ -1900,6 +2034,7 @@ def _find_step(steps: List[Dict[str, Any]], step_id: Any) -> Optional[Dict[str, 
 def _render_replay_html(payload: Dict[str, Any], speed_ms: int) -> str:
     run_id = html.escape(str(payload.get("run_id", "")))
     records = json.dumps(_build_replay_records(payload), ensure_ascii=False)
+    payload_json = _json_for_script(payload)
     return f"""<!doctype html>
 <html><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>qita replay {run_id}</title>
@@ -1914,6 +2049,11 @@ body{{margin:0;background:radial-gradient(circle at 20% 0%,#12233f,#090d16 62%);
 .stats{{display:flex;gap:8px;flex-wrap:wrap;padding:8px 10px;border-bottom:1px solid var(--line);background:#081021}}
 .chip{{font-size:11px;color:#cde0ff;border:1px solid #28406a;border-radius:999px;padding:3px 8px;background:#0d1a31}}
 .screen{{padding:14px;min-height:480px;display:grid;gap:10px}}
+.replay-preview{{border:1px solid var(--line);background:#081021;border-radius:10px;padding:10px}}
+.replay-shot{{position:relative;border:1px solid #1b2a44;border-radius:8px;overflow:hidden;background:#050a14;min-height:180px;display:flex;align-items:center;justify-content:center}}
+.replay-shot img{{max-width:100%;display:block}}
+.replay-overlay{{position:absolute;inset:0;pointer-events:none}}
+.replay-dot{{position:absolute;width:12px;height:12px;border-radius:999px;background:rgba(255,107,107,.85);border:2px solid #fff;transform:translate(-50%,-50%)}}
 .card{{border:1px solid var(--line);background:#0a1224;border-radius:10px;padding:10px;box-shadow:0 6px 16px rgba(0,0,0,.25)}}
 .ctitle{{font-size:12px;font-weight:700;margin-bottom:6px;display:flex;justify-content:space-between;gap:8px}}
 .tag{{font-size:10px;border:1px solid var(--line);padding:1px 6px;border-radius:999px;color:#a8bbdf}}
@@ -1949,13 +2089,16 @@ body{{margin:0;background:radial-gradient(circle at 20% 0%,#12233f,#090d16 62%);
       </div>
     </div>
     <div class="stats" id="stats"></div>
+    <div class="stats"><div id="preview" style="width:100%"></div></div>
     <div class="screen" id="screen"></div>
   </div>
 </div>
 <script>
 const records = {records};
+const payload = {payload_json};
 const screen = document.getElementById('screen');
 const stats = document.getElementById('stats');
+const preview = document.getElementById('preview');
 const progress = document.getElementById('progress');
 const speedEl = document.getElementById('speed');
 const playBtn = document.getElementById('play');
@@ -2093,6 +2236,24 @@ function fmt(r){{
     '<details style="margin-top:8px"><summary style="cursor:pointer;color:#8aa2c7">Raw</summary><pre style="white-space:pre-wrap;background:#081021;border:1px solid #1b2a44;border-radius:8px;padding:8px">'+raw+'</pre></details>' +
     '</article>';
 }}
+function buildPreview(r){{
+  if(!r){{ preview.innerHTML = '<div class="muted">No visual step selected.</div>'; return; }}
+  const step = Array.isArray(payload.steps) ? payload.steps.find(function(st){{ return String(st.step_id) === String(r.step_id); }}) : null;
+  const assets = step && Array.isArray(step.visual_assets) ? step.visual_assets : [];
+  const shot = assets.find(function(a){{ return a && typeof a === 'object' && a.kind === 'screenshot'; }});
+  if(!shot || !shot.path){{ preview.innerHTML = '<div class="muted">No screenshot for this step.</div>'; return; }}
+  let overlay = '';
+  const actions = step && Array.isArray(step.actions) ? step.actions : [];
+  if(actions.length){{
+    const args = (actions[0] && typeof actions[0] === 'object' && typeof actions[0].args === 'object') ? actions[0].args : {{}};
+    const x = Number(args.x);
+    const y = Number(args.y);
+    if(Number.isFinite(x) && Number.isFinite(y)){{
+      overlay = '<div class="replay-overlay"><div class="replay-dot" style="left:' + x + 'px;top:' + y + 'px"></div></div>';
+    }}
+  }}
+  preview.innerHTML = '<div class="replay-preview"><div style="font-size:12px;color:#8aa2c7;margin-bottom:8px">step ' + esc(String(r.step_id)) + ' · ' + esc(String(r.phase || '')) + '</div><div class="replay-shot"><img src="/asset?path=' + encodeURIComponent(String(shot.path)) + '" alt="replay screenshot"/>' + overlay + '</div></div>';
+}}
 function shouldShow(r){{
   if(onlyErr.checked && !r.error) return false;
   return true;
@@ -2115,6 +2276,7 @@ function render(){{
     '<span class="chip">cursor: '+i+'/'+records.length+'</span>' +
     '<span class="chip">kinds: '+esc(kindText)+'</span>';
   screen.innerHTML = shown.map(fmt).join('') + (i >= records.length ? '<span class="cursor"></span>' : '');
+  buildPreview(shown.length ? shown[shown.length - 1] : null);
   progress.value = String(i);
   window.scrollTo(0, document.body.scrollHeight);
 }}

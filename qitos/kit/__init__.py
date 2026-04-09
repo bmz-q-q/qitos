@@ -1,19 +1,6 @@
 """Curated practical building blocks for common QiTOS agent authoring."""
 
-from . import (
-    critic,
-    env,
-    evaluate,
-    history,
-    memory,
-    metric,
-    parser,
-    planning,
-    prompts,
-    state,
-    tool,
-    toolset,
-)
+import importlib
 from .critic import ReActSelfReflectionCritic
 from .env import (
     ContainerDesktopProvider,
@@ -74,6 +61,30 @@ from .tool import (
 )
 from .toolset import codebase_tools, coding_tools, editor_tools, report_tools, toolset_from_tools
 from .toolset import ComputerUseToolSet, computer_use_tools
+
+_LAZY_MODULE_EXPORTS = {
+    "critic",
+    "env",
+    "evaluate",
+    "history",
+    "memory",
+    "metric",
+    "parser",
+    "planning",
+    "prompts",
+    "state",
+    "tool",
+    "toolset",
+}
+
+
+def __getattr__(name: str):
+    if name in _LAZY_MODULE_EXPORTS:
+        module = importlib.import_module(f".{name}", __name__)
+        globals()[name] = module
+        return module
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 __all__ = [
     "critic",

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from qitos.benchmark import GaiaAdapter
+from examples.benchmarks.gaia_eval import run_gaia_recipe_task as wrapper_run_gaia_recipe_task
+from qitos.benchmark import GaiaAdapter, resolve_builtin_runner
+from qitos.recipes.benchmarks.gaia import run_gaia_recipe_task
 
 
 def test_gaia_adapter_converts_records_to_tasks():
@@ -47,3 +49,9 @@ def test_gaia_adapter_fallback_id_and_objective():
     assert task.objective.startswith("Solve this GAIA benchmark task")
     assert task.metadata["benchmark"] == "GAIA"
     assert "raw_record" in task.metadata
+
+
+def test_gaia_benchmark_uses_builtin_runner_and_thin_example_wrapper():
+    runner = resolve_builtin_runner(benchmark="gaia", strategy="gaia_smoke")
+    assert callable(runner)
+    assert wrapper_run_gaia_recipe_task is run_gaia_recipe_task

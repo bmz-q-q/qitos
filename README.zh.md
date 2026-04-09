@@ -20,6 +20,8 @@ QitOS 是面向 agent 研究者的 torch-flavor 框架。
 - 新增 `qit bench` 官方工作流，覆盖 `run`、`eval`、`replay`、`export`。
 - `qita` 支持 replay、export 与 diff，方便做 review 级轨迹分析。
 - 教程课程与可复现 benchmark / failed-run replay 教程已补齐。
+- desktop benchmark 现在完成了清晰分层：`desktop-starter` 继续作为官方 starter benchmark，`qitos.recipes.desktop.osworld_starter` 承载可复现 baseline recipe，而 `qitos.benchmark.osworld` 则开始承接真实 OSWorld 风格的 adapter/runtime/evaluator 集成。
+- 现在整个 benchmark 面也完成了统一收口：GAIA、Tau-Bench、CyBench、`desktop-starter` 和 `osworld` 都开始通过 `qitos.benchmark` + `qitos.recipes` 路径运行，同时新增了第三方 benchmark 接入规范，方便未来继续扩展。
 
 如果这个方向对你有帮助，欢迎 star、提 issue，或者直接参与贡献。
 

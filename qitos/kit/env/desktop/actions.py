@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Mapping
 
+from qitos.core.multimodal import ActionSpace
 
 KEYBOARD_KEYS = [
     "tab",
@@ -122,6 +123,43 @@ def normalize_gui_action(payload: Mapping[str, Any]) -> Dict[str, Any]:
     }
 
 
+DESKTOP_ACTION_REQUIRED_ARGS: Dict[str, List[str]] = {
+    "move_to": ["x", "y"],
+    "click": ["x", "y"],
+    "mouse_down": ["x", "y"],
+    "mouse_up": ["x", "y"],
+    "right_click": ["x", "y"],
+    "double_click": ["x", "y"],
+    "drag_to": ["x", "y"],
+    "scroll": ["delta_y"],
+    "type_text": ["text"],
+    "press_key": ["key"],
+    "key_down": ["key"],
+    "key_up": ["key"],
+    "hotkey": ["keys"],
+    "wait": [],
+    "done": [],
+    "fail": ["reason"],
+}
+
+
+def desktop_action_space() -> ActionSpace:
+    return ActionSpace(
+        id="desktop_gui_v1",
+        allowed_actions=list(GUI_ACTION_NAMES),
+        required_args={k: list(v) for k, v in DESKTOP_ACTION_REQUIRED_ARGS.items()},
+        metadata={
+            "lane": "desktop",
+            "osworld_compatible": True,
+        },
+    )
+
+
+def validate_gui_action(payload: Mapping[str, Any]) -> Dict[str, Any]:
+    normalized = normalize_gui_action(payload)
+    return desktop_action_space().validate(normalized)
+
+
 def to_osworld_action(payload: Mapping[str, Any]) -> Dict[str, Any]:
     normalized = normalize_gui_action(payload)
     action_type = normalized["action_type"]
@@ -138,6 +176,7 @@ def action_result_payload(
     status: str = "success",
     message: str = "",
     provider: str = "desktop",
+    execution_state: str | None = None,
     metadata: Mapping[str, Any] | None = None,
 ) -> Dict[str, Any]:
     normalized = normalize_gui_action(action)
@@ -146,6 +185,8 @@ def action_result_payload(
         "action": normalized,
         "provider": str(provider or "desktop"),
     }
+    if execution_state is not None:
+        payload["execution_state"] = str(execution_state)
     if str(message or "").strip():
         payload["message"] = str(message)
     if isinstance(metadata, Mapping) and metadata:
@@ -163,8 +204,10 @@ __all__ = [
     "KEYBOARD_KEYS",
     "OSWORLD_ACTION_MAP",
     "action_result_payload",
+    "desktop_action_space",
     "normalize_gui_action",
     "normalize_gui_action_name",
     "supported_gui_actions",
     "to_osworld_action",
+    "validate_gui_action",
 ]

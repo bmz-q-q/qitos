@@ -1,0 +1,48 @@
+---
+title: "Computer Use 与 Desktop Env"
+description: "在 QitOS 上构建 OSWorld-inspired desktop agent，而不绑定某一家 provider 的 computer-use API。"
+---
+
+# Computer Use 与 Desktop Env
+
+QitOS v0.5 现在把 desktop / computer-use 正式提升成一条官方主线。
+
+核心组成：
+
+- `DesktopEnv`
+- `ComputerUseToolSet`
+- `desktop_actions_json_v1` / `desktop_actions_xml_v1`
+- 官方 `desktop-starter` benchmark starter
+- 独立的 `osworld` benchmark adapter
+- `examples/real/openai_cua_agent.py`
+- qita visual replay
+
+## canonical baseline
+
+`examples/real/openai_cua_agent.py` 不再只是 demo。
+
+真正的 baseline 实现现在在 recipe 层：
+
+- `/Users/morinop/coding/yoga_framework/qitos/recipes/desktop/osworld_starter.py`
+
+公开 example 只保留为薄入口：
+
+- `/Users/morinop/coding/yoga_framework/examples/real/openai_cua_agent.py`
+
+它现在是 benchmark-grade starter baseline，包含：
+
+- planner
+- grounding
+- action selector
+- critic / retry
+- explicit stop / fail
+
+## 官方 benchmark 入口
+
+```bash
+qit bench run \
+  --benchmark desktop-starter \
+  --split starter \
+  --strategy desktop_smoke \
+  --output ./artifacts/desktop-starter.jsonl
+```

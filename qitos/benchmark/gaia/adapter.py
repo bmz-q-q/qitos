@@ -246,6 +246,8 @@ class GaiaAdapter(BenchmarkAdapter):
             "dataset_name": self.dataset_name,
             "level": level,
             "source_id": raw_id,
+            "reference_answer": ref_answer,
+            "task_index": idx,
         }
         if self.include_raw_record:
             metadata["raw_record"] = dict(normalized)
