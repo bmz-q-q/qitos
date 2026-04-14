@@ -251,7 +251,16 @@ class _ModelRuntime(Generic[StateT, ObservationT, ActionT]):
                 f"context overflow: input_tokens={pre_context.input_tokens_total} budget={pre_context.available_input_budget}"
             )
         injection_prefixes: List[str] = []
-        messages.extend(history)
+        # If native tool call rounds exist, build a multi-turn conversation
+        # by injecting assistant(tool_calls) + tool(results) message pairs.
+        # This replaces the flat user/assistant history for those steps.
+        if engine._native_tool_rounds:
+            # Build the conversation with proper multi-turn structure
+            messages.extend(self._build_native_tool_conversation(
+                history, engine._native_tool_rounds, str(prepared)
+            ))
+        else:
+            messages.extend(history)
         for item in prompt_messages:
             if not isinstance(item, dict):
                 continue
@@ -328,6 +337,24 @@ class _ModelRuntime(Generic[StateT, ObservationT, ActionT]):
         engine._history_append(
             "assistant", response.text, record.step_id, metadata={"source": "engine"}
         )
+
+        # When native tool calls are used, record the assistant tool_calls
+        # for injection into subsequent API calls. OpenAI multi-turn function
+        # calling requires the full conversation: assistant(tool_calls) -> tool(results)
+        if response.tool_calls and self._native_tool_call_preferred():
+            engine._native_tool_rounds.append({
+                "step_id": record.step_id,
+                "assistant_tool_calls": [
+                    {
+                        "id": tc.get("id"),
+                        "type": tc.get("type", "function"),
+                        "function": tc.get("function", {}),
+                    }
+                    for tc in response.tool_calls
+                ],
+                "tool_results": [],  # will be filled in by _action_runtime
+            })
+
         return response
 
     def _build_model_request_options(
@@ -1207,6 +1234,68 @@ class _ModelRuntime(Generic[StateT, ObservationT, ActionT]):
         if protocol is not None and getattr(protocol, "supports_native_tool_call_markup", False):
             return True
         return False
+
+    def _build_native_tool_conversation(
+        self,
+        flat_history: List[Dict[str, Any]],
+        native_rounds: List[Dict[str, Any]],
+        current_prepared: str,
+    ) -> List[Dict[str, Any]]:
+        """Build a multi-turn conversation with proper assistant+tool message pairs.
+
+        Instead of the flat user/assistant history, constructs OpenAI-compatible
+        multi-turn messages where:
+        - assistant messages include tool_calls
+        - tool messages include tool_call_id and results
+        - user messages are preserved between rounds
+        """
+        # Limit the number of rounds to include to avoid context overflow.
+        # Keep only the most recent rounds.
+        max_rounds = 5
+        rounds_to_include = native_rounds[-max_rounds:] if len(native_rounds) > max_rounds else native_rounds
+
+        # If we dropped earlier rounds, add a summary marker
+        result: List[Dict[str, Any]] = []
+        dropped = len(native_rounds) - len(rounds_to_include)
+        if dropped > 0:
+            result.append({
+                "role": "user",
+                "content": f"[Summary: {dropped} earlier tool call steps omitted for context budget]",
+            })
+            result.append({
+                "role": "assistant",
+                "content": "Understood. I'll continue from where we are.",
+            })
+
+        for rnd in rounds_to_include:
+            step_id = rnd["step_id"]
+
+            # Add a user message representing the state at this step
+            result.append({
+                "role": "user",
+                "content": f"[Step {step_id + 1}] Continue investigating and generating the PoC.",
+            })
+
+            # Add the assistant message with tool_calls
+            result.append({
+                "role": "assistant",
+                "content": None,
+                "tool_calls": rnd.get("assistant_tool_calls", []),
+            })
+
+            # Add tool result messages, truncated to save context budget
+            for tool_msg in rnd.get("tool_results", []):
+                content = tool_msg.get("content", "")
+                # Truncate long tool results
+                if len(content) > 2000:
+                    content = content[:2000] + "\n...[truncated]"
+                result.append({
+                    "role": "tool",
+                    "tool_call_id": tool_msg.get("tool_call_id", ""),
+                    "content": content,
+                })
+
+        return result
 
     def _action_from_tool_call(self, tool_call: Dict[str, Any]) -> Action | None:
         if not isinstance(tool_call, dict):

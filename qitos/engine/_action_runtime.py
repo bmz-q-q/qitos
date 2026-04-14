@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any, Dict, Generic, List, TypeVar, cast
 
 from ..core.action import Action
@@ -81,6 +82,38 @@ class _ActionRuntime(Generic[StateT, ActionT]):
         record.action_results = results
         for item in results:
             engine._memory_append("action_result", item, record.step_id)
+
+        # When native tool calls were used, record tool results in the
+        # engine's native tool round tracker for multi-turn API calls.
+        if record.decision_source == "native_tool_calls" and record.native_tool_call_used:
+            # Find the latest unfinished native tool round
+            for round_entry in reversed(engine._native_tool_rounds):
+                if round_entry["step_id"] == record.step_id and not round_entry.get("tool_results"):
+                    tool_call_infos = []
+                    for action in actions:
+                        if action.action_id:
+                            tool_call_infos.append({
+                                "id": action.action_id,
+                                "name": action.name,
+                            })
+                    # Build tool result messages matching OpenAI format
+                    tool_result_msgs = []
+                    for i, result in enumerate(results):
+                        # Skip env observation results - they're not tool call results
+                        if isinstance(result, dict) and "env" in result and len(result) == 1:
+                            continue
+                        tool_call_id = None
+                        if i < len(tool_call_infos):
+                            tool_call_id = tool_call_infos[i].get("id")
+                        elif tool_call_infos:
+                            tool_call_id = tool_call_infos[-1].get("id")
+                        result_str = json.dumps(result) if not isinstance(result, str) else result
+                        tool_result_msgs.append({
+                            "tool_call_id": tool_call_id or f"call_{record.step_id}_{i}",
+                            "content": result_str[:3000],
+                        })
+                    round_entry["tool_results"] = tool_result_msgs
+                    break
         engine._emit(
             record.step_id,
             RuntimePhase.ACT,

@@ -187,6 +187,8 @@ class Engine(Generic[StateT, ObservationT, ActionT]):
         self._last_system_prompt: str = ""
         self._last_prompt_metadata: Dict[str, Any] = {}
         self._last_context_telemetry: Dict[str, Any] = {}
+        # Native tool call round tracking for OpenAI multi-turn function calling
+        self._native_tool_rounds: List[Dict[str, Any]] = []
         self._model_runtime: _ModelRuntime[StateT, ObservationT, ActionT] = (
             _ModelRuntime(self)
         )
@@ -949,6 +951,7 @@ class Engine(Generic[StateT, ObservationT, ActionT]):
         self._resolved_protocol = None
         self._resolved_protocol_source = ""
         self._last_prompt_metadata = {}
+        self._native_tool_rounds = []
 
     def _clear_active_context(self) -> None:
         self._trace_runtime.clear_active_context()
