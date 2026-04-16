@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import inspect
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Union, cast, get_args, get_origin, get_type_hints
+from typing import Any, Callable, Dict, List, Optional, cast
 
 
 @dataclass
@@ -410,13 +410,6 @@ def get_tool_meta(func: Callable[..., Any]) -> Optional[ToolMeta]:
 
 def build_tool_spec(func: Callable[..., Any], meta: ToolMeta) -> ToolSpec:
     sig = inspect.signature(func)
-    target = getattr(func, "__func__", func)
-    module = inspect.getmodule(target)
-    globalns = getattr(module, "__dict__", {})
-    try:
-        resolved_hints = get_type_hints(target, globalns=globalns, localns=globalns)
-    except Exception:
-        resolved_hints = {}
     params = {}
     required = []
 
@@ -431,8 +424,7 @@ def build_tool_spec(func: Callable[..., Any], meta: ToolMeta) -> ToolSpec:
             "process_ops",
         }:
             continue
-        annotation = resolved_hints.get(name, p.annotation)
-        params[name] = {"type": _type_to_json(annotation), "description": ""}
+        params[name] = {"type": _type_to_json(p.annotation), "description": ""}
         if p.default is inspect.Parameter.empty:
             required.append(name)
 
@@ -466,9 +458,6 @@ def build_tool_spec(func: Callable[..., Any], meta: ToolMeta) -> ToolSpec:
 
 
 def _type_to_json(annotation: Any) -> str:
-    if annotation in {inspect.Parameter.empty, inspect.Signature.empty}:
-        return "string"
-
     mapping = {
         str: "string",
         int: "integer",
@@ -476,40 +465,8 @@ def _type_to_json(annotation: Any) -> str:
         bool: "boolean",
         dict: "object",
         list: "array",
-        type(None): "null",
     }
-    if isinstance(annotation, str):
-        return {
-            "str": "string",
-            "int": "integer",
-            "float": "number",
-            "bool": "boolean",
-            "dict": "object",
-            "list": "array",
-            "None": "null",
-        }.get(annotation, "string")
-
-    if annotation is Any:
-        return "object"
-
-    if annotation in mapping:
-        return mapping[annotation]
-
-    origin = get_origin(annotation)
-    if origin is None:
-        return "string"
-
-    if origin in {list, List, tuple, set, frozenset}:
-        return "array"
-    if origin in {dict, Dict}:
-        return "object"
-    if origin is Union:
-        non_null = [item for item in get_args(annotation) if item is not type(None)]
-        if len(non_null) == 1:
-            return _type_to_json(non_null[0])
-        return next((_type_to_json(item) for item in non_null), "string")
-
-    return "object"
+    return mapping.get(annotation, "any")
 
 
 __all__ = [
