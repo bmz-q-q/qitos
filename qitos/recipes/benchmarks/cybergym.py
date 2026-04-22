@@ -30,9 +30,12 @@ def run_cybergym_recipe_task(
     trace_logdir: str,
     trace_prefix: str = "qitos_cybergym",
 ) -> dict[str, Any]:
+    out_root = Path(out_dir).expanduser().resolve()
+    workspace_root = out_root / "workspace"
+    workspace_root.mkdir(parents=True, exist_ok=True)
     task_dir = prepare_task_dir(
         task_id=task_id,
-        out_dir=out_dir,
+        out_dir=workspace_root / task_slug(task_id),
         data_dir=data_dir,
         server=server,
         difficulty=difficulty,

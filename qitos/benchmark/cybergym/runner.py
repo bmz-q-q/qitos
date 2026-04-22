@@ -73,8 +73,12 @@ def run_cybergym_agent_task(
         max_steps=internal_step_limit,
         max_runtime_seconds=max_runtime_seconds,
     )
-    workspace_root = str(task.inputs.get("source_root") or task_path)
     task_root = str(task.inputs.get("task_root") or task_path)
+    source_root = str(task.inputs.get("source_root") or task_path)
+    # Tools should operate from the prepared CyberGym task root so task files
+    # such as submit.sh stay inside the workspace sandbox. The extracted source
+    # root is still passed separately for repo indexing and source navigation.
+    workspace_root = task_root
 
     agent = build_agent(
         model=model_name,
@@ -92,8 +96,8 @@ def run_cybergym_agent_task(
         MaxRuntimeCriteria(max_runtime_seconds=max_runtime_seconds),
     ]
     context_config = ContextConfig(
-        tool_result_max_chars=4000,
-        conversation_max_rounds=10,
+        tool_result_max_chars=60000,
+        conversation_max_rounds=0,
         loop_max_repeats=3,
     )
     trace_writer = make_trace_writer(
@@ -127,8 +131,9 @@ def run_cybergym_agent_task(
         error_txt=task.inputs.get("error_txt", ""),
         patch_diff=task.inputs.get("patch_diff", ""),
         task_root=task.inputs.get("task_root", task_root),
-        source_root=task.inputs.get("source_root", workspace_root),
-        repo_dir=task.inputs.get("source_root", task.inputs.get("repo_dir", "")),
+        source_root=source_root,
+        repo_dir=source_root or task.inputs.get("repo_dir", ""),
+        trace_run_dir=str(trace_writer.run_dir),
     )
 
     return {

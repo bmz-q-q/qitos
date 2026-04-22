@@ -75,6 +75,7 @@ def test_build_model_for_preset_attaches_harness_metadata() -> None:
     assert metadata["native_tool_call_preferred"] is True
     assert metadata["decision_lane_preference"] == "native_tool_calls"
     assert metadata["effective_tool_delivery"] == "api_parameter"
+    assert llm.timeout == 120
 
 
 def test_build_model_for_glm_preset_attaches_native_tool_call_metadata() -> None:

@@ -7,6 +7,7 @@ Supports environment variable configuration: OPENAI_API_KEY, OPENAI_BASE_URL
 
 import json
 import os
+import time
 from typing import Any, Dict, List, Optional, cast
 
 from ..core.multimodal import (
@@ -17,6 +18,30 @@ from ..core.multimodal import (
     normalize_messages,
 )
 from .base import Model
+
+
+OPENAI_DEFAULT_TIMEOUT = 120
+OPENAI_DEFAULT_RETRIES = 3
+
+
+def _retry_delay_seconds(attempt_index: int) -> float:
+    return float(min(8, 2 ** max(0, int(attempt_index))))
+
+
+def _call_with_retries(operation, *, retries: int = OPENAI_DEFAULT_RETRIES):
+    last_error: Exception | None = None
+    total_attempts = max(1, int(retries))
+    for attempt in range(total_attempts):
+        try:
+            return operation()
+        except Exception as exc:  # Retry all provider errors, including timeouts.
+            last_error = exc
+            if attempt >= total_attempts - 1:
+                raise
+            time.sleep(_retry_delay_seconds(attempt))
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError("retry loop exited without returning or raising")
 
 
 def _to_openai_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -112,7 +137,7 @@ class OpenAIModel(Model):
         system_prompt: Optional[str] = None,
         temperature: float = 0.7,
         max_tokens: int = 2048,
-        timeout: int = 60,
+        timeout: int = OPENAI_DEFAULT_TIMEOUT,
         context_window: Optional[int] = None,
     ):
         """
@@ -164,7 +189,9 @@ class OpenAIModel(Model):
                 api_key=self.api_key, base_url=self.base_url, timeout=self.timeout
             )
 
-            response = self._chat_completion(client, messages, **kwargs)
+            response = _call_with_retries(
+                lambda: self._chat_completion(client, messages, **kwargs)
+            )
             return self._parse_response(response)
 
         except openai.APIError as e:
@@ -215,7 +242,7 @@ class OpenAIModel(Model):
         client = openai.OpenAI(
             api_key=self.api_key, base_url=self.base_url, timeout=self.timeout
         )
-        return self._chat_completion(client, messages, **kwargs)
+        return _call_with_retries(lambda: self._chat_completion(client, messages, **kwargs))
 
     def _usage_from_response(self, response: Any) -> Optional[Dict[str, Any]]:
         usage = getattr(response, "usage", None)
@@ -327,7 +354,7 @@ class OpenAICompatibleModel(Model):
         system_prompt: Optional[str] = None,
         temperature: float = 0.7,
         max_tokens: int = 2048,
-        timeout: int = 60,
+        timeout: int = OPENAI_DEFAULT_TIMEOUT,
         context_window: Optional[int] = None,
     ):
         """
@@ -377,7 +404,9 @@ class OpenAICompatibleModel(Model):
                 api_key=self.api_key, base_url=self.base_url, timeout=self.timeout
             )
 
-            response = self._chat_completion(client, messages, **kwargs)
+            response = _call_with_retries(
+                lambda: self._chat_completion(client, messages, **kwargs)
+            )
             return self._parse_response(response)
 
         except openai.APIError as e:
@@ -479,7 +508,7 @@ class OpenAICompatibleModel(Model):
         client = openai.OpenAI(
             api_key=self.api_key, base_url=self.base_url, timeout=self.timeout
         )
-        return self._chat_completion(client, messages, **kwargs)
+        return _call_with_retries(lambda: self._chat_completion(client, messages, **kwargs))
 
     def _usage_from_response(self, response: Any) -> Optional[Dict[str, Any]]:
         usage = getattr(response, "usage", None)
@@ -529,7 +558,7 @@ class AzureOpenAIModel(OpenAICompatibleModel):
         system_prompt: Optional[str] = None,
         temperature: float = 0.7,
         max_tokens: int = 2048,
-        timeout: int = 60,
+        timeout: int = OPENAI_DEFAULT_TIMEOUT,
         context_window: Optional[int] = None,
     ):
         """
@@ -587,12 +616,14 @@ class AzureOpenAIModel(OpenAICompatibleModel):
                 timeout=self.timeout,
             )
 
-            response = client.chat.completions.create(
-                model=self.deployment or "",
-                messages=cast(Any, _to_openai_messages(messages)),
-                temperature=self.temperature,
-                max_tokens=self.max_tokens,
-                **kwargs,
+            response = _call_with_retries(
+                lambda: client.chat.completions.create(
+                    model=self.deployment or "",
+                    messages=cast(Any, _to_openai_messages(messages)),
+                    temperature=self.temperature,
+                    max_tokens=self.max_tokens,
+                    **kwargs,
+                )
             )
             self._set_last_usage(self._usage_from_response(response))
 

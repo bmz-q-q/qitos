@@ -1,10 +1,12 @@
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 from qitos.benchmark import normalize_benchmark_name, resolve_builtin_runner
 from qitos.benchmark.cybergym import CyberGymBenchmarkAdapter, make_trace_writer, task_slug
+import qitos.benchmark.cybergym.runner as cybergym_runner
 from qitos.recipes.benchmarks import cybergym
 
 
@@ -44,7 +46,7 @@ class CybergymRecipeTests(unittest.TestCase):
         self.assertIs(cybergym.make_trace_writer, make_trace_writer)
 
     def test_recipe_passes_runtime_budget_without_step_cap(self):
-        with mock.patch.object(cybergym, "prepare_task_dir", return_value=Path("/tmp/task")):
+        with mock.patch.object(cybergym, "prepare_task_dir", return_value=Path("/tmp/out/workspace/arvo_1065")):
             with mock.patch.object(cybergym, "run_cybergym_agent_task", return_value={}) as run:
                 cybergym.run_cybergym_recipe_task(
                     task_id="arvo:1065",
@@ -63,6 +65,66 @@ class CybergymRecipeTests(unittest.TestCase):
         kwargs = run.call_args.kwargs
         self.assertIsNone(kwargs["max_steps"])
         self.assertEqual(kwargs["max_runtime_seconds"], 3600)
+        self.assertEqual(str(kwargs["task_dir"]), "/tmp/out/workspace/arvo_1065")
+
+    def test_runner_uses_task_root_workspace_and_keeps_source_root_context(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            task_root = Path(tmpdir).resolve()
+            source_root = task_root / "repo-vul" / "project"
+            source_root.mkdir(parents=True)
+
+            fake_task = SimpleNamespace(
+                id="arvo:1065",
+                inputs={
+                    "task_id": "arvo:1065",
+                    "agent_id": "agent",
+                    "checksum": "checksum",
+                    "server_url": "http://server",
+                    "source_root": str(source_root),
+                    "repo_dir": str(task_root / "repo-vul"),
+                    "task_root": str(task_root),
+                    "description": "desc",
+                    "error_txt": "",
+                    "patch_diff": "",
+                },
+            )
+            fake_agent = mock.Mock()
+            fake_agent.run.return_value = SimpleNamespace(
+                state=SimpleNamespace(stop_reason="final", final_result="ok"),
+                step_count=1,
+                task_result=None,
+            )
+
+            with mock.patch(
+                "qitos.benchmark.cybergym.agent.adapter.CyberGymAdapter"
+            ) as adapter_cls, mock.patch(
+                "qitos.benchmark.cybergym.agent.cli.build_agent",
+                return_value=fake_agent,
+            ) as build_agent, mock.patch(
+                "qitos.benchmark.cybergym.agent.stop_criteria.PoCVerificationCriteria",
+                return_value=object(),
+            ), mock.patch.object(cybergym_runner, "HostEnv") as host_env:
+                adapter_cls.return_value.from_task_dir.return_value = fake_task
+                cybergym_runner.run_cybergym_agent_task(
+                    task_dir=str(task_root),
+                    model_name="GLM-5.1",
+                    api_key="key",
+                    base_url="http://model/v1",
+                    server="http://server",
+                    max_steps=None,
+                    max_runtime_seconds=3600,
+                    trace_logdir=str(task_root / "traces"),
+                )
+
+            build_kwargs = build_agent.call_args.kwargs
+            self.assertEqual(build_kwargs["workspace_root"], str(task_root))
+            self.assertEqual(build_kwargs["task_root"], str(task_root))
+            host_env.assert_called_once_with(workspace_root=str(task_root))
+            run_kwargs = fake_agent.run.call_args.kwargs
+            self.assertGreaterEqual(run_kwargs["context_config"].tool_result_max_chars, 50000)
+            self.assertEqual(run_kwargs["workspace"], str(task_root))
+            self.assertEqual(run_kwargs["source_root"], str(source_root))
+            self.assertEqual(run_kwargs["repo_dir"], str(source_root))
 
 
 if __name__ == "__main__":

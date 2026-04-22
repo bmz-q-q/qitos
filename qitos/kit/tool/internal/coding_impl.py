@@ -563,21 +563,25 @@ class CodingToolSet:
         :param path: Path relative to the workspace root.
         :param runtime_context: Optional runtime context injected by the executor.
         """
-        result = self.file_read_v2(
-            path=path,
-            offset=0,
-            limit=100_000,
-            max_chars=200_000,
-            runtime_context=runtime_context,
-        )
-        if result.get("status") != "success":
-            return result
-        return {
-            "status": "success",
-            "path": path,
-            "content": result.get("content", ""),
-            "size": len(result.get("content", "")),
-        }
+        _ = runtime_context
+        try:
+            resolved = _resolve_workspace_path(self.workspace_root, path)
+            if not resolved.exists():
+                return {"status": "error", "message": f"File not found: {path}"}
+            if resolved.is_dir():
+                return {"status": "error", "message": f"Path is a directory: {path}"}
+            content, line_ending, _mtime = self._read_text_file(resolved)
+            return {
+                "status": "success",
+                "path": path,
+                "content": content,
+                "size": len(content),
+                "truncated": False,
+                "total_lines": len(content.splitlines()),
+                "line_ending": line_ending,
+            }
+        except Exception as e:
+            return {"status": "error", "message": str(e), "path": path}
 
     @tool(
         name="view",
