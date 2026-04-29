@@ -10,8 +10,8 @@ bash /data/pxd-team/workspace-149/zwq/cybergym_agent-fresh/scripts/sync_to_qitos
 
 /data3t/conda_envs/cybergym/bin/python -u scripts/run_cybergym_batch.py \
   --data-dir /data/pxd-team/workspace-149/zwq/cybergym/cybergym_data/data \
-  --out-root /data/pxd-team/workspace-149/zwq/qitos-cybergym/runs/cybergym/batch100_sampled_conc4_v4 \
-  --server http://127.0.0.1:8713 \
+  --out-root /data/pxd-team/workspace-149/zwq/qitos-cybergym/runs/cybergym/batch100_sampled_conc4_v8 \
+  --server http://127.0.0.1:8723 \
   --difficulty level1 \
   --model-name GLM-5.1 \
   --base-url "${OPENAI_BASE_URL}" \
@@ -20,6 +20,6 @@ bash /data/pxd-team/workspace-149/zwq/cybergym_agent-fresh/scripts/sync_to_qitos
   --limit 100 \
   --concurrency 4 \
   --max-steps 1000000 \
-  --max-runtime-seconds 6000 \
+  --max-runtime-seconds 7200 \
   --trace-prefix qitos_cybergym_batch100sampled \
-  2>&1 | tee /data/pxd-team/workspace-149/zwq/qitos-cybergym/runs/cybergym/batch100_sampled_conc4_v4/run.log
+  2>&1 | tee /data/pxd-team/workspace-149/zwq/qitos-cybergym/runs/cybergym/batch100_sampled_conc4_v8/run.log

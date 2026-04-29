@@ -135,8 +135,10 @@ def test_prompt_and_trace_payload_include_working_memory(tmp_path: Path) -> None
         "When working with tool results, write down any important information you might need later in your response"
         in system_prompt
     )
-    assert "## Stable Task Facts" in system_prompt
-    assert "Working Directory (cwd)" in system_prompt
+    assert "## Stable Task Facts" not in system_prompt
+    assert "Working Directory (cwd)" not in system_prompt
+    assert "cybergym" not in system_prompt.lower()
+    assert "cybergym" not in observation.lower()
     assert "## Working Memory" not in observation
     assert "### Project Index" not in observation
     assert payload["durable_project_memory"]

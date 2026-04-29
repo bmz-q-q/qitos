@@ -8,9 +8,12 @@ Supports environment variable configuration: OPENAI_API_KEY, OPENAI_BASE_URL
 import json
 import os
 import time
+from functools import lru_cache
+from pathlib import Path
 from typing import Any, Dict, List, Optional, cast
 
 from ..core.multimodal import (
+    content_to_text,
     ensure_data_url,
     file_to_data_url,
     has_nontext_content,
@@ -22,6 +25,7 @@ from .base import Model
 
 OPENAI_DEFAULT_TIMEOUT = 120
 OPENAI_DEFAULT_RETRIES = 3
+GLM_TOKENIZER_ENV_VARS = ("QITOS_GLM_TOKENIZER_PATH", "GLM_TOKENIZER_PATH")
 
 
 def _retry_delay_seconds(attempt_index: int) -> float:
@@ -108,6 +112,65 @@ def _to_openai_content_blocks(content: List[Any]) -> List[Dict[str, Any]]:
             continue
         blocks.append({"type": "text", "text": str(block)})
     return blocks
+
+
+def _is_glm_model_name(model: str) -> bool:
+    normalized = str(model or "").strip().lower()
+    return normalized.startswith("glm-") or normalized.startswith("zai-org/glm-")
+
+
+def _glm_tokenizer_path() -> Optional[str]:
+    for name in GLM_TOKENIZER_ENV_VARS:
+        value = os.getenv(name, "").strip()
+        if value and Path(value).exists():
+            return value
+    return None
+
+
+@lru_cache(maxsize=4)
+def _load_glm_tokenizer(path: str) -> Any:
+    from transformers import AutoTokenizer
+
+    return AutoTokenizer.from_pretrained(
+        path,
+        trust_remote_code=True,
+        local_files_only=True,
+    )
+
+
+def _tokenizer_count_result(value: Any) -> Optional[int]:
+    if isinstance(value, int):
+        return int(value)
+    if isinstance(value, list):
+        return len(value)
+    getter = getattr(value, "get", None)
+    if callable(getter):
+        ids = getter("input_ids")
+        if isinstance(ids, list):
+            return len(ids)
+    return None
+
+
+def _normalize_messages_for_tokenizer(payload: List[Any]) -> List[Dict[str, str]]:
+    messages: List[Dict[str, str]] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            messages.append({"role": "user", "content": str(item)})
+            continue
+        role = str(item.get("role") or "user").strip() or "user"
+        content = content_to_text(item.get("content"))
+        extras: Dict[str, Any] = {}
+        for key in ("tool_calls", "tool_call_id", "name"):
+            if key in item and item.get(key) not in (None, "", []):
+                extras[key] = item.get(key)
+        if extras:
+            content = (
+                content
+                + "\n"
+                + json.dumps(extras, ensure_ascii=False, sort_keys=True)
+            ).strip()
+        messages.append({"role": role, "content": content})
+    return messages
 
 
 class OpenAIModel(Model):
@@ -386,6 +449,43 @@ class OpenAICompatibleModel(Model):
             raise ValueError(
                 "OPENAI_BASE_URL not set. Please set environment variable or pass base_url parameter."
             )
+
+    def count_tokens(self, messages_or_text: Any) -> Optional[int]:
+        if self._should_use_glm_tokenizer():
+            value = self._count_tokens_with_glm_tokenizer(messages_or_text)
+            if isinstance(value, int) and value >= 0:
+                return value
+        return super().count_tokens(messages_or_text)
+
+    def _should_use_glm_tokenizer(self) -> bool:
+        metadata = dict(getattr(self, "qitos_harness_metadata", {}) or {})
+        if str(metadata.get("family_preset") or "").strip().lower() == "glm":
+            return True
+        return _is_glm_model_name(self.model)
+
+    def _count_tokens_with_glm_tokenizer(self, payload: Any) -> Optional[int]:
+        path = _glm_tokenizer_path()
+        if not path:
+            return None
+        try:
+            tokenizer = _load_glm_tokenizer(path)
+        except Exception:
+            return None
+
+        try:
+            if isinstance(payload, list):
+                messages = _normalize_messages_for_tokenizer(payload)
+                encoded = tokenizer.apply_chat_template(
+                    messages,
+                    tokenize=True,
+                    add_generation_prompt=False,
+                )
+                return _tokenizer_count_result(encoded)
+            text = self._stringify_token_payload(payload)
+            encoded = tokenizer.encode(text, add_special_tokens=False)
+            return _tokenizer_count_result(encoded)
+        except Exception:
+            return None
 
     def _call_api(self, messages: List[Dict[str, Any]], **kwargs: Any) -> str:
         """
