@@ -1,5 +1,6 @@
 """Minimal multimodal visual inspection agent for QitOS v0.5."""
 
+
 from __future__ import annotations
 
 import os

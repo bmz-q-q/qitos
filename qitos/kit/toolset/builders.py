@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from qitos.core.tool import tool
+from qitos.core.function_tool_decorator import function_tool
 from qitos.core.tool_registry import ToolRegistry
 from .advanced import advanced_coding_tools
 from .codebase import codebase_tools
@@ -10,7 +10,6 @@ from .coding import coding_tools
 from .editor import editor_tools
 from .notebook import notebook_tools
 from .report import report_tools
-from .security_audit import security_audit_tools
 from .task import task_tools
 from .web import web_tools
 
@@ -19,7 +18,7 @@ def math_tools() -> ToolRegistry:
     """Build a tiny registry of arithmetic example tools."""
     registry = ToolRegistry()
 
-    @tool(name="add")
+    @function_tool(name="add")
     def add(a: int, b: int) -> int:
         """
         Return the sum of two integers.
@@ -29,7 +28,7 @@ def math_tools() -> ToolRegistry:
         """
         return a + b
 
-    @tool(name="multiply")
+    @function_tool(name="multiply")
     def multiply(a: int, b: int) -> int:
         """
         Return the product of two integers.
@@ -42,6 +41,12 @@ def math_tools() -> ToolRegistry:
     registry.register(add)
     registry.register(multiply)
     return registry
+
+
+def security_audit_tools(*args, **kwargs):
+    from .security_audit import security_audit_tools as _security_audit_tools
+
+    return _security_audit_tools(*args, **kwargs)
 
 
 __all__ = [

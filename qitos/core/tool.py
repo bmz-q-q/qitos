@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import inspect
-from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Union, cast, get_args, get_origin, get_type_hints
+from dataclasses import asdict, dataclass, field
+from typing import Any, Callable, Dict, List, Optional, cast
 
 
 @dataclass
@@ -13,6 +13,30 @@ class ToolPermission:
     filesystem_write: bool = False
     network: bool = False
     command: bool = False
+
+
+@dataclass(frozen=True)
+class ToolPermissionSpec:
+    """Serializable snapshot of a tool's permission and capability profile."""
+
+    name: str
+    description: str = ""
+    permissions: ToolPermission = field(default_factory=ToolPermission)
+    needs_approval: bool = False
+    read_only: bool = False
+    concurrency_safe: bool = False
+    required_ops: List[str] = field(default_factory=list)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "name": self.name,
+            "description": self.description,
+            "permissions": asdict(self.permissions),
+            "needs_approval": self.needs_approval,
+            "read_only": self.read_only,
+            "concurrency_safe": self.concurrency_safe,
+            "required_ops": list(self.required_ops),
+        }
 
 
 @dataclass
@@ -173,6 +197,37 @@ class ToolPermissionContext:
 
 
 @dataclass
+class RetryPolicy:
+    """Per-tool retry configuration with exponential backoff and exception filtering.
+
+    When attached to a tool via ``@function_tool(retry_policy=...)`` or
+    ``ToolSpec.retry_policy``, the :class:`ActionExecutor` uses this policy
+    instead of the bare ``max_retries`` integer.
+
+    Attributes:
+        max_attempts: Total attempts including the first call (e.g. 3 = 1 initial + 2 retries).
+        backoff_factor: Base delay in seconds for exponential backoff.
+        max_backoff: Maximum delay cap in seconds.
+        jitter: If True, add random jitter to backoff delay.
+        retryable_exceptions: Tuple of exception types that trigger a retry.
+            Other exceptions propagate immediately.
+    """
+
+    max_attempts: int = 3
+    backoff_factor: float = 0.5
+    max_backoff: float = 60.0
+    jitter: bool = True
+    retryable_exceptions: tuple = (Exception,)
+
+    def __post_init__(self):
+        for exc_type in self.retryable_exceptions:
+            if not (isinstance(exc_type, type) and issubclass(exc_type, BaseException)):
+                raise TypeError(
+                    f"retryable_exceptions must contain exception types, got {exc_type!r}"
+                )
+
+
+@dataclass
 class ToolSpec:
     name: str
     description: str
@@ -180,31 +235,39 @@ class ToolSpec:
     required: List[str] = field(default_factory=list)
     timeout_s: Optional[float] = None
     max_retries: int = 0
+    retry_policy: Optional[RetryPolicy] = None
+    on_failure: Optional[Callable] = None
     permissions: ToolPermission = field(default_factory=ToolPermission)
     required_ops: List[str] = field(default_factory=list)
     input_schema: Optional[Dict[str, Any]] = None
     output_schema: Optional[Dict[str, Any]] = None
     read_only: bool = False
     concurrency_safe: bool = False
+    needs_approval: bool = False
     requires_user_interaction: bool = False
     supports_background: bool = False
     result_max_chars: Optional[int] = None
     produces_artifact: bool = False
     rule_scope_builder: Optional[Callable[[Dict[str, Any]], Optional[str]]] = None
+    prompt: str = ""
 
 
 @dataclass
 class ToolMeta:
     name: Optional[str] = None
     description: Optional[str] = None
+    prompt: str = ""
     timeout_s: Optional[float] = None
     max_retries: int = 0
+    retry_policy: Optional[RetryPolicy] = None
+    on_failure: Optional[Callable] = None
     permissions: ToolPermission = field(default_factory=ToolPermission)
     required_ops: List[str] = field(default_factory=list)
     input_schema: Optional[Dict[str, Any]] = None
     output_schema: Optional[Dict[str, Any]] = None
     read_only: bool = False
     concurrency_safe: bool = False
+    needs_approval: bool = False
     requires_user_interaction: bool = False
     supports_background: bool = False
     result_max_chars: Optional[int] = None
@@ -316,6 +379,14 @@ class FunctionTool(BaseTool):
     """Tool wrapper around callable functions or bound methods."""
 
     def __init__(self, func: Callable[..., Any], meta: Optional[ToolMeta] = None):
+        # If func is already a FunctionTool (e.g. from __get__ binding),
+        # unwrap it to get the underlying callable
+        if isinstance(func, FunctionTool):
+            self.func = func.func
+            self.meta = meta or func.meta
+            spec = func.spec
+            super().__init__(spec)
+            return
         self.func = func
         self.meta = meta or get_tool_meta(func) or ToolMeta()
         spec = build_tool_spec(func, self.meta)
@@ -323,6 +394,21 @@ class FunctionTool(BaseTool):
         description = inspect.getdoc(func) or self.meta.description
         if description:
             self.spec.description = inspect.cleandoc(description)
+
+    def __get__(self, obj, objtype=None):
+        """Descriptor protocol: bind the tool to an instance when accessed as a method.
+
+        This allows ``@function_tool`` to work on class methods the same way
+        ``@tool`` does — the underlying function receives ``self`` automatically.
+        """
+        if obj is None:
+            return self
+        # Create a bound copy that prepends obj (self) to the function call
+        bound = FunctionTool.__new__(FunctionTool)
+        bound.func = self.func.__get__(obj, objtype)
+        bound.meta = self.meta
+        bound.spec = self.spec
+        return bound
 
     def run(self, **kwargs: Any) -> Any:
         return self.func(**kwargs)
@@ -356,14 +442,18 @@ class FunctionTool(BaseTool):
 def tool(
     name: Optional[str] = None,
     description: Optional[str] = None,
+    prompt: str = "",
     timeout_s: Optional[float] = None,
     max_retries: int = 0,
+    retry_policy: Optional[RetryPolicy] = None,
+    on_failure: Optional[Callable] = None,
     permissions: Optional[ToolPermission] = None,
     required_ops: Optional[List[str]] = None,
     input_schema: Optional[Dict[str, Any]] = None,
     output_schema: Optional[Dict[str, Any]] = None,
     read_only: bool = False,
     concurrency_safe: bool = False,
+    needs_approval: bool = False,
     requires_user_interaction: bool = False,
     supports_background: bool = False,
     result_max_chars: Optional[int] = None,
@@ -376,14 +466,18 @@ def tool(
         meta = ToolMeta(
             name=name,
             description=description,
+            prompt=prompt,
             timeout_s=timeout_s,
             max_retries=max_retries,
+            retry_policy=retry_policy,
+            on_failure=on_failure,
             permissions=permissions or ToolPermission(),
             required_ops=list(required_ops or []),
             input_schema=input_schema,
             output_schema=output_schema,
             read_only=read_only,
             concurrency_safe=concurrency_safe,
+            needs_approval=needs_approval,
             requires_user_interaction=requires_user_interaction,
             supports_background=supports_background,
             result_max_chars=result_max_chars,
@@ -410,13 +504,6 @@ def get_tool_meta(func: Callable[..., Any]) -> Optional[ToolMeta]:
 
 def build_tool_spec(func: Callable[..., Any], meta: ToolMeta) -> ToolSpec:
     sig = inspect.signature(func)
-    target = getattr(func, "__func__", func)
-    module = inspect.getmodule(target)
-    globalns = getattr(module, "__dict__", {})
-    try:
-        resolved_hints = get_type_hints(target, globalns=globalns, localns=globalns)
-    except Exception:
-        resolved_hints = {}
     params = {}
     required = []
 
@@ -431,8 +518,7 @@ def build_tool_spec(func: Callable[..., Any], meta: ToolMeta) -> ToolSpec:
             "process_ops",
         }:
             continue
-        annotation = resolved_hints.get(name, p.annotation)
-        params[name] = {"type": _type_to_json(annotation), "description": ""}
+        params[name] = {"type": _type_to_json(p.annotation), "description": ""}
         if p.default is inspect.Parameter.empty:
             required.append(name)
 
@@ -446,6 +532,8 @@ def build_tool_spec(func: Callable[..., Any], meta: ToolMeta) -> ToolSpec:
         required=required,
         timeout_s=meta.timeout_s,
         max_retries=meta.max_retries,
+        retry_policy=meta.retry_policy,
+        on_failure=meta.on_failure,
         permissions=meta.permissions,
         required_ops=list(meta.required_ops),
         input_schema=meta.input_schema
@@ -457,18 +545,17 @@ def build_tool_spec(func: Callable[..., Any], meta: ToolMeta) -> ToolSpec:
         output_schema=meta.output_schema,
         read_only=meta.read_only,
         concurrency_safe=meta.concurrency_safe,
+        needs_approval=meta.needs_approval,
         requires_user_interaction=meta.requires_user_interaction,
         supports_background=meta.supports_background,
         result_max_chars=meta.result_max_chars,
         produces_artifact=meta.produces_artifact,
         rule_scope_builder=meta.rule_scope_builder,
+        prompt=meta.prompt,
     )
 
 
 def _type_to_json(annotation: Any) -> str:
-    if annotation in {inspect.Parameter.empty, inspect.Signature.empty}:
-        return "string"
-
     mapping = {
         str: "string",
         int: "integer",
@@ -476,45 +563,23 @@ def _type_to_json(annotation: Any) -> str:
         bool: "boolean",
         dict: "object",
         list: "array",
-        type(None): "null",
     }
-    if isinstance(annotation, str):
-        return {
-            "str": "string",
-            "int": "integer",
-            "float": "number",
-            "bool": "boolean",
-            "dict": "object",
-            "list": "array",
-            "None": "null",
-        }.get(annotation, "string")
+    result = mapping.get(annotation)
+    if result is not None:
+        return result
+    # Fallback to type_to_json_schema for complex types
+    from .tool_schema import type_to_json_schema
 
-    if annotation is Any:
-        return "object"
-
-    if annotation in mapping:
-        return mapping[annotation]
-
-    origin = get_origin(annotation)
-    if origin is None:
-        return "string"
-
-    if origin in {list, List, tuple, set, frozenset}:
-        return "array"
-    if origin in {dict, Dict}:
-        return "object"
-    if origin is Union:
-        non_null = [item for item in get_args(annotation) if item is not type(None)]
-        if len(non_null) == 1:
-            return _type_to_json(non_null[0])
-        return next((_type_to_json(item) for item in non_null), "string")
-
-    return "object"
+    schema = type_to_json_schema(annotation)
+    if isinstance(schema, dict) and "type" in schema and isinstance(schema["type"], str):
+        return schema["type"]
+    return "any"
 
 
 __all__ = [
     "BaseTool",
     "FunctionTool",
+    "RetryPolicy",
     "ToolMeta",
     "ToolPermission",
     "ToolPermissionContext",

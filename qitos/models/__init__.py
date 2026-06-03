@@ -25,7 +25,7 @@ Usage:
     llm = ModelFactory.from_env()
 """
 
-from .base import Model, AsyncModel, ModelFactory
+from .base import Model, AsyncModel, ModelFactory, ModelStreamChunk
 from .context_registry import infer_context_window
 from .profile_registry import (
     ModelProfile,
@@ -36,7 +36,13 @@ from .profile_registry import (
 from .anthropic import AnthropicModel
 from .gemini import GeminiModel
 from .litellm import LiteLLMModel
-from .openai import OpenAIModel, OpenAICompatibleModel, AzureOpenAIModel
+from .openai import (
+    OpenAIModel,
+    OpenAICompatibleModel,
+    AzureOpenAIModel,
+    AsyncOpenAIModel,
+    AsyncOpenAICompatibleModel,
+)
 from .local import OllamaModel, OllamaGenerateModel, LMStudioModel, VLLMModel
 
 __all__ = [
@@ -44,6 +50,7 @@ __all__ = [
     "Model",
     "AsyncModel",
     "ModelFactory",
+    "ModelStreamChunk",
     "infer_context_window",
     "ModelProfile",
     "infer_model_profile",
@@ -53,6 +60,8 @@ __all__ = [
     "OpenAIModel",
     "OpenAICompatibleModel",
     "AzureOpenAIModel",
+    "AsyncOpenAIModel",
+    "AsyncOpenAICompatibleModel",
     "AnthropicModel",
     "GeminiModel",
     "LiteLLMModel",

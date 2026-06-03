@@ -27,6 +27,26 @@ from qitos.qita._cli_app import _cmd_replay as qita_replay
 
 def main(argv: list[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
+    if args and args[0] == "--version":
+        from qitos import __version__
+        print(f"qit {__version__}")
+        return 0
+    if args and args[0] in {"-h", "--help"}:
+        parser = argparse.ArgumentParser(
+            prog="qit", description="QitOS CLI for demos, benchmarks, and developer workflows"
+        )
+        subparsers = parser.add_subparsers(dest="command")
+        subparsers.add_parser("demo", help="Run packaged demos and quickstarts")
+        subparsers.add_parser("skill", help="Manage third-party skills")
+        subparsers.add_parser("bench", help="Unified benchmark CLI")
+        subparsers.add_parser("experiment", help="Run parameter-sweep experiments")
+        subparsers.add_parser("new", help="Scaffold a new agent from a template")
+        subparsers.add_parser("list-templates", help="List built-in agent templates")
+        subparsers.add_parser("leaderboard", help="Local benchmark leaderboard")
+        subparsers.add_parser("push", help="Push trace artifacts to HF Hub")
+        subparsers.add_parser("pull", help="Pull trace artifacts from HF Hub")
+        parser.print_help()
+        return 0
     if args:
         command = args[0]
         remaining = args[1:]
@@ -36,6 +56,18 @@ def main(argv: list[str] | None = None) -> int:
             return skill_main(remaining)
         if command == "bench":
             return _bench_main(remaining)
+        if command == "experiment":
+            return _experiment_main(remaining)
+        if command == "new":
+            return _new_main(remaining)
+        if command == "list-templates":
+            return _list_templates_main(remaining)
+        if command == "leaderboard":
+            return _leaderboard_main(remaining)
+        if command == "push":
+            return _push_main(remaining)
+        if command == "pull":
+            return _pull_main(remaining)
     parser = argparse.ArgumentParser(
         prog="qit", description="QitOS CLI for demos, benchmarks, and developer workflows"
     )
@@ -43,6 +75,12 @@ def main(argv: list[str] | None = None) -> int:
     subparsers.add_parser("demo", help="Run packaged demos and quickstarts")
     subparsers.add_parser("skill", help="Manage third-party skills")
     subparsers.add_parser("bench", help="Unified benchmark CLI")
+    subparsers.add_parser("experiment", help="Run parameter-sweep experiments")
+    subparsers.add_parser("new", help="Scaffold a new agent from a template")
+    subparsers.add_parser("list-templates", help="List built-in agent templates")
+    subparsers.add_parser("leaderboard", help="Local benchmark leaderboard")
+    subparsers.add_parser("push", help="Push trace artifacts to HF Hub")
+    subparsers.add_parser("pull", help="Pull trace artifacts from HF Hub")
     parser.print_help()
     return 1
 
@@ -133,6 +171,11 @@ def _bench_main(argv: list[str]) -> int:
     p_export.add_argument("--run", required=True)
     p_export.add_argument("--html", required=True)
 
+    p_list = sub.add_parser("list", help="List available benchmarks and splits")
+    p_list.add_argument("--benchmark", default=None, help="Show splits for a specific benchmark")
+
+    p_presets = sub.add_parser("presets", help="List available model-family presets")
+
     args = parser.parse_args(argv)
     if args.command == "run":
         return _bench_run(args)
@@ -142,6 +185,10 @@ def _bench_main(argv: list[str]) -> int:
         return _bench_replay(args)
     if args.command == "export":
         return _bench_export(args)
+    if args.command == "list":
+        return _bench_list(args)
+    if args.command == "presets":
+        return _bench_presets(args)
     return 1
 
 
@@ -230,6 +277,453 @@ def _bench_replay(args: argparse.Namespace) -> int:
 
 def _bench_export(args: argparse.Namespace) -> int:
     return qita_export(run=str(args.run), html_path=str(args.html))
+
+
+def _bench_list(args: argparse.Namespace) -> int:
+    if args.benchmark:
+        benchmark = normalize_benchmark_name(args.benchmark)
+        try:
+            tasks = load_benchmark_tasks(benchmark=benchmark, split="test")
+            print(f"benchmark={benchmark}  test_tasks={len(tasks)}")
+        except Exception as exc:
+            print(f"Could not load benchmark {benchmark}: {exc}", file=sys.stderr)
+            return 1
+        return 0
+
+    known_benchmarks = [
+        ("gaia", "GAIA — general AI assistant benchmark"),
+        ("tau-bench", "Tau-Bench — tool-use agent benchmark (airline/retail)"),
+        ("cybench", "CyBench — cybersecurity CTF benchmark"),
+        ("cybergym", "CyberGym — cyber risk assessment benchmark"),
+        ("desktop-starter", "Desktop Starter — mock desktop environment tasks"),
+        ("osworld", "OSWorld — real desktop OS interaction benchmark"),
+    ]
+    for name, description in known_benchmarks:
+        print(f"  {name:20s}  {description}")
+    return 0
+
+
+def _bench_presets(args: argparse.Namespace) -> int:
+    from qitos.harness._presets import known_family_presets
+
+    gold_ids = {"qwen", "kimi", "minimax", "gpt-oss", "gemma-4"}
+    for preset in known_family_presets():
+        marker = " *" if preset.id in gold_ids else ""
+        ctx = preset.context_policy.context_window_hint
+        ctx_str = f"{ctx // 1000}k" if ctx else "-"
+        models = ", ".join(preset.recommended_models[:2]) if preset.recommended_models else "-"
+        print(
+            f"  {preset.id:12s}{marker}  {preset.display_name:16s}  "
+            f"{preset.default_protocol:26s}  {preset.tool_policy.primary_delivery:18s}  "
+            f"ctx={ctx_str:>6s}  {models}"
+        )
+    print()
+    print("  * = gold preset (most thoroughly tested)")
+    return 0
+
+
+def _experiment_main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(
+        prog="qit experiment", description="QitOS experiment runner"
+    )
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    p_run = sub.add_parser("run", help="Run an experiment from a YAML config")
+    p_run.add_argument("--config", required=True, help="Path to experiment YAML config")
+    p_run.add_argument("--output", default="./runs/experiments", help="Output directory")
+    p_run.add_argument("--cache", choices=["memory", "disk"], default=None, help="Cache backend")
+    p_run.add_argument("--cache-dir", default="./runs/cache", help="Cache directory (disk backend)")
+    p_run.add_argument("--concurrency", type=int, default=1, help="Parallel tasks")
+    p_run.add_argument("--resume", action="store_true", help="Skip completed tasks")
+    p_run.add_argument("--agent-module", default=None, help="Dotted path to AgentModule subclass")
+
+    args = parser.parse_args(argv)
+    if args.command == "run":
+        return _experiment_run(args)
+    return 1
+
+
+def _experiment_run(args: argparse.Namespace) -> int:
+    from qitos.config.loader import load_agent_config
+    from qitos.experiment import ExperimentRunner, SweepSpec
+    from qitos.experiment.sweep import sweep_product
+    from qitos.core.spec import ExperimentSpec
+
+    config = load_agent_config(args.config)
+
+    # Parse sweep from config metadata if present
+    sweep = SweepSpec()
+    sweep_raw = config.metadata.get("sweep", {})
+    if sweep_raw and isinstance(sweep_raw, dict):
+        sweep = SweepSpec(params=sweep_raw)
+
+    experiment_spec = ExperimentSpec(
+        name=config.name,
+        benchmark_name=config.metadata.get("benchmark"),
+        benchmark_split=config.metadata.get("split"),
+        metadata=config.metadata,
+    )
+
+    # Build cache config
+    cache_config = None
+    if args.cache == "disk":
+        cache_config = {"backend": "disk", "dir": args.cache_dir}
+    elif args.cache == "memory":
+        cache_config = {"backend": "memory"}
+
+    # Build checkpoint config from metadata
+    checkpoint_config = None
+    cp_raw = config.metadata.get("checkpoint", {})
+    if cp_raw and isinstance(cp_raw, dict):
+        checkpoint_config = cp_raw
+
+    # Resolve agent module
+    agent = None
+    if args.agent_module:
+        import importlib
+
+        parts = args.agent_module.rsplit(".", 1)
+        if len(parts) == 2:
+            module = importlib.import_module(parts[0])
+            agent_cls = getattr(module, parts[1], None)
+            if agent_cls is not None:
+                agent = agent_cls()
+    if agent is None:
+        print(
+            "Warning: No --agent-module provided. "
+            "ExperimentRunner requires an agent to run tasks.",
+            file=sys.stderr,
+        )
+        return 1
+
+    runner = ExperimentRunner(
+        agent=agent,
+        config=config,
+        sweep=sweep,
+        experiment_spec=experiment_spec,
+        cache_config=cache_config,
+        checkpoint_config=checkpoint_config,
+        concurrency=args.concurrency,
+        resume=args.resume,
+        output_dir=args.output,
+    )
+    result = runner.run()
+    print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2))
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# qit new / qit list-templates
+# ---------------------------------------------------------------------------
+
+_TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
+
+# Known scaffold templates (cookiecutter-based)
+_SCAFFOLD_TEMPLATES = {
+    "qitos_new_agent": "Scaffold a complete agent project with tests and eval config",
+}
+
+# Known method templates (paper reproduction / reference)
+_METHOD_TEMPLATES = {
+    "react": "ReAct — Reason+Act agent with scratchpad",
+    "plan_act": "Plan-and-Act — separate planning and execution phases",
+    "swe_agent": "SWE-Agent — software engineering agent",
+    "voyager": "Voyager — open-ended exploration with skill library",
+    "debate": "Debate — multi-agent debate for reasoning",
+    "manager_worker": "Manager-Worker — orchestration with delegation",
+    "planner_executor": "Planner-Executor — plan decomposition with execution",
+    "self_refine": "Self-Refine — iterative generate, critique, and refine",
+    "reflexion": "Reflexion — act, reflect, and retry with memory",
+    "lats": "LATS — Monte Carlo tree search with language evaluation",
+    "moa": "MoA — parallel proposals and aggregation",
+    "magentic_one": "Magentic-One — orchestrator with specialist workers",
+}
+
+
+def _list_templates_main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(
+        prog="qit list-templates", description="List built-in agent templates"
+    )
+    parser.add_argument(
+        "--type",
+        choices=["scaffold", "method", "all"],
+        default="all",
+        help="Filter by template type (default: all)",
+    )
+    args = parser.parse_args(argv)
+
+    if args.type in ("scaffold", "all"):
+        print("Scaffold templates (cookiecutter-based, used with 'qit new'):")
+        for name, desc in _SCAFFOLD_TEMPLATES.items():
+            print(f"  {name:20s}  {desc}")
+        if args.type == "all":
+            print()
+
+    if args.type in ("method", "all"):
+        print("Method templates (paper reproduction / reference):")
+        for name, desc in _METHOD_TEMPLATES.items():
+            template_dir = _TEMPLATES_DIR / name
+            marker = "" if template_dir.is_dir() else "  [not installed]"
+            print(f"  {name:20s}  {desc}{marker}")
+
+    return 0
+
+
+def _new_main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(
+        prog="qit new", description="Scaffold a new agent from a template"
+    )
+    parser.add_argument(
+        "--template",
+        default="qitos_new_agent",
+        help="Template to use (default: qitos_new_agent)",
+    )
+    parser.add_argument(
+        "--output-dir",
+        default=".",
+        help="Directory to create the project in (default: current directory)",
+    )
+    parser.add_argument(
+        "--no-input",
+        action="store_true",
+        help="Use default values from cookiecutter.json without prompting",
+    )
+    # Pass-through cookiecutter parameters
+    parser.add_argument("--agent-name", help="Agent name (cookiecutter param)")
+    parser.add_argument("--agent-description", help="Agent description (cookiecutter param)")
+    parser.add_argument("--author", help="Author name (cookiecutter param)")
+    parser.add_argument("--default-model", help="Default model ID (cookiecutter param)")
+    parser.add_argument("--max-steps", type=int, help="Max steps (cookiecutter param)")
+
+    args = parser.parse_args(argv)
+
+    template_dir = _TEMPLATES_DIR / args.template
+    if not template_dir.is_dir():
+        print(
+            f"Error: Template '{args.template}' not found. "
+            f"Run 'qit list-templates' to see available templates.",
+            file=sys.stderr,
+        )
+        return 1
+
+    # Check for cookiecutter.json to confirm it's a scaffold template
+    if not (template_dir / "cookiecutter.json").exists():
+        print(
+            f"Error: Template '{args.template}' is not a scaffold template "
+            f"(no cookiecutter.json). Method templates are reference-only.",
+            file=sys.stderr,
+        )
+        return 1
+
+    try:
+        from cookiecutter.main import cookiecutter
+    except ImportError:
+        print(
+            "Error: cookiecutter is required for 'qit new'. "
+            "Install it with: pip install cookiecutter",
+            file=sys.stderr,
+        )
+        return 1
+
+    # Build extra_context from CLI args
+    extra_context: dict[str, str] = {}
+    if args.agent_name:
+        extra_context["agent_name"] = args.agent_name
+    if args.agent_description:
+        extra_context["agent_description"] = args.agent_description
+    if args.author:
+        extra_context["author"] = args.author
+    if args.default_model:
+        extra_context["default_model"] = args.default_model
+    if args.max_steps is not None:
+        extra_context["max_steps"] = str(args.max_steps)
+
+    try:
+        result_dir = cookiecutter(
+            str(template_dir),
+            output_dir=args.output_dir,
+            no_input=args.no_input or bool(extra_context),
+            extra_context=extra_context or None,
+        )
+        print(f"Created agent project at: {result_dir}")
+        return 0
+    except Exception as exc:
+        print(f"Error generating project: {exc}", file=sys.stderr)
+        return 1
+
+
+# ---------------------------------------------------------------------------
+# qit leaderboard
+# ---------------------------------------------------------------------------
+
+
+def _leaderboard_main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(prog="qit leaderboard", description="Local benchmark leaderboard")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    p_submit = sub.add_parser("submit", help="Submit benchmark results to the leaderboard")
+    p_submit.add_argument("--results", help="Path to JSONL results file")
+    p_submit.add_argument("--run-dir", help="Path to a single run directory")
+    p_submit.add_argument("--db", default="./runs/leaderboard.db", help="Leaderboard database path")
+
+    p_show = sub.add_parser("show", help="Show leaderboard entries")
+    p_show.add_argument("--benchmark", help="Filter by benchmark name")
+    p_show.add_argument("--split", help="Filter by split")
+    p_show.add_argument("--model", help="Filter by model name")
+    p_show.add_argument("--official", action="store_true", help="Show only official runs")
+    p_show.add_argument("--sort-by", default="submitted_at", help="Sort field")
+    p_show.add_argument("--limit", type=int, default=50, help="Max rows to show")
+    p_show.add_argument("--db", default="./runs/leaderboard.db", help="Leaderboard database path")
+
+    p_summary = sub.add_parser("summary", help="Show aggregated statistics")
+    p_summary.add_argument("--benchmark", required=True, help="Benchmark name")
+    p_summary.add_argument("--split", required=True, help="Split name")
+    p_summary.add_argument("--official", action="store_true", help="Official runs only")
+    p_summary.add_argument("--db", default="./runs/leaderboard.db", help="Leaderboard database path")
+
+    args = parser.parse_args(argv)
+
+    from qitos.leaderboard.store import LeaderboardStore
+
+    if args.command == "submit":
+        store = LeaderboardStore(args.db)
+        try:
+            if args.results:
+                count = store.submit_results_file(args.results)
+                print(f"Submitted {count} results from {args.results}")
+            elif args.run_dir:
+                sid = store.submit_run_dir(args.run_dir)
+                print(f"Submitted run {args.run_dir} as {sid}")
+            else:
+                print("Error: provide --results or --run-dir", file=sys.stderr)
+                return 1
+        finally:
+            store.close()
+        return 0
+
+    if args.command == "show":
+        store = LeaderboardStore(args.db)
+        try:
+            rows = store.query(
+                benchmark=args.benchmark,
+                split=args.split,
+                model_name=args.model,
+                is_official=args.official or None,
+                sort_by=args.sort_by,
+                limit=args.limit,
+            )
+            if not rows:
+                print("No entries found.")
+                return 0
+            print(f"{'model':30s} {'bench':15s} {'split':10s} {'ok':3s} {'steps':6s} {'lat':8s} {'official':3s} {'submitted':20s}")
+            for r in rows:
+                print(
+                    f"{r.model_name:30s} {r.benchmark:15s} {r.split:10s} "
+                    f"{'Y' if r.success else 'N':3s} {r.steps:6d} {r.latency_seconds:8.1f} "
+                    f"{'Y' if r.is_official else 'N':3s} {r.submitted_at[:19]:20s}"
+                )
+        finally:
+            store.close()
+        return 0
+
+    if args.command == "summary":
+        store = LeaderboardStore(args.db)
+        try:
+            s = store.summary(args.benchmark, args.split, is_official=args.official)
+            print(json.dumps(s, ensure_ascii=False, indent=2))
+        finally:
+            store.close()
+        return 0
+
+    return 1
+
+
+# ---------------------------------------------------------------------------
+# qit push / qit pull
+# ---------------------------------------------------------------------------
+
+
+def _push_main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(prog="qit push", description="Push trace artifacts to HF Hub")
+    parser.add_argument("--run", help="Path to a single run directory")
+    parser.add_argument("--logdir", help="Push all runs in a logdir")
+    parser.add_argument("--repo", required=True, help="HF Hub dataset repo ID")
+    parser.add_argument("--token", help="HF Hub API token")
+    parser.add_argument("--revision", help="Git revision/branch")
+    parser.add_argument("--private", action="store_true", default=True, help="Make repo private (default)")
+    parser.add_argument("--public", action="store_false", dest="private", help="Make repo public")
+
+    args = parser.parse_args(argv)
+
+    try:
+        from qitos.hf.hub import push_run
+    except RuntimeError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+    if args.run:
+        try:
+            url = push_run(
+                args.run, args.repo, token=args.token,
+                revision=args.revision, private=args.private,
+            )
+            print(f"Pushed to {url}")
+        except Exception as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 1
+        return 0
+
+    if args.logdir:
+        logdir = Path(args.logdir).expanduser().resolve()
+        if not logdir.is_dir():
+            print(f"Error: {args.logdir} is not a directory", file=sys.stderr)
+            return 1
+        count = 0
+        for run_dir in sorted(logdir.iterdir()):
+            if run_dir.is_dir() and (run_dir / "manifest.json").exists():
+                try:
+                    url = push_run(
+                        run_dir, args.repo, token=args.token,
+                        revision=args.revision, private=args.private,
+                    )
+                    print(f"Pushed {run_dir.name} -> {url}")
+                    count += 1
+                except Exception as exc:
+                    print(f"Warning: skipped {run_dir.name}: {exc}", file=sys.stderr)
+        print(f"Pushed {count} runs")
+        return 0
+
+    print("Error: provide --run or --logdir", file=sys.stderr)
+    return 1
+
+
+def _pull_main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(prog="qit pull", description="Pull trace artifacts from HF Hub")
+    parser.add_argument("--run-id", required=True, help="Run ID to download")
+    parser.add_argument("--repo", required=True, help="HF Hub dataset repo ID")
+    parser.add_argument("--output", default="./runs", help="Local output directory")
+    parser.add_argument("--token", help="HF Hub API token")
+    parser.add_argument("--revision", help="Git revision/branch")
+
+    args = parser.parse_args(argv)
+
+    try:
+        from qitos.hf.hub import pull_run
+    except RuntimeError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+    try:
+        local_path = pull_run(
+            args.run_id, args.repo, args.output,
+            token=args.token, revision=args.revision,
+        )
+        print(f"Pulled to {local_path}")
+    except Exception as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+    return 0
 
 
 if __name__ == "__main__":

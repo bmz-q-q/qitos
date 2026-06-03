@@ -1,5 +1,6 @@
 """Practical SWE agent: dynamic planning, branch search, and verification."""
 
+
 from __future__ import annotations
 
 import os

@@ -1,5 +1,6 @@
 """Thin example entrypoint for the canonical desktop starter recipe."""
 
+
 from __future__ import annotations
 
 from qitos.recipes.desktop.osworld_starter import (

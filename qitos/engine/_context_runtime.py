@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import asdict
 from typing import Any, Dict, Iterable, List, Optional
 
+from ._protocol import _EngineProtocol
 from .states import ContextConfig, ContextTelemetry
 
 
@@ -13,7 +14,7 @@ class ContextOverflowError(RuntimeError):
 
 
 class _ContextRuntime:
-    def __init__(self, engine: Any):
+    def __init__(self, engine: _EngineProtocol):
         self.engine = engine
         self.config = ContextConfig()
         self.reset()
@@ -27,6 +28,7 @@ class _ContextRuntime:
         self.warning_count = 0
         self.compact_counts: Dict[str, int] = {}
         self.last_request: Optional[ContextTelemetry] = None
+        self.reactive_compact_attempts = 0
 
     def apply_config(self, config: ContextConfig | Dict[str, Any] | None) -> None:
         if config is None:

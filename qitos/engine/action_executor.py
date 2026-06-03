@@ -3,76 +3,186 @@
 from __future__ import annotations
 
 import time
-from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Any, Dict, List, Optional, Sequence, Tuple, TYPE_CHECKING
 
 from ..core.action import Action, ActionExecutionPolicy, ActionResult, ActionStatus
 from ..core.env import Env
+from ..core.interceptor import InterceptorChain, InterceptorContext
 from ..core.tool import (
     BaseTool,
     ToolPermissionContext,
     ToolPermissionDecision,
     ToolValidationResult,
 )
+from .states import RuntimePhase
+
+if TYPE_CHECKING:
+    from ._protocol import _EngineProtocol
+
+
+# Tools that are safe to run concurrently (read-only, no side effects)
+_CONCURRENCY_SAFE_TOOLS = frozenset({
+    "file_read_v2", "read_file", "Read", "view",
+    "Glob", "Grep", "glob_v2", "grep_v2",
+    "WebFetch", "web_fetch_v2",
+    "task_list", "task_get",
+})
 
 
 class ActionExecutor:
     """Executes normalized actions against a tool registry."""
 
     def __init__(
-        self, tool_registry: Any, policy: Optional[ActionExecutionPolicy] = None
+        self,
+        tool_registry: Any,
+        policy: Optional[ActionExecutionPolicy] = None,
+        trace_writer: Any = None,
+        delegate_depth: int = 0,
+        shared_memory: Any = None,
+        engine: Optional[_EngineProtocol] = None,
+        permission_pipeline: Any = None,
+        read_before_write_enforcer: Any = None,
+        permission_interaction_callback: Optional[Any] = None,
+        interceptor_chain: Optional[InterceptorChain] = None,
+        auto_approve: bool = False,
     ):
         self.tool_registry = tool_registry
         self.policy = policy or ActionExecutionPolicy()
+        self.trace_writer = trace_writer
+        self.delegate_depth = delegate_depth
+        self.shared_memory = shared_memory
+        self._engine = engine
+        self._pipeline = permission_pipeline
+        self._rbw_enforcer = read_before_write_enforcer
+        self._permission_interaction_callback = permission_interaction_callback
+        self._interceptor_chain = interceptor_chain
+        self.auto_approve = auto_approve
 
     def execute(
         self, actions: Sequence[Action], env: Optional[Env] = None, state: Any = None
     ) -> List[ActionResult]:
-        if self.policy.mode == "parallel":
-            return self._execute_parallel(actions, env=env, state=state)
+        if not actions:
+            return []
+
+        # Single action: execute directly
+        if len(actions) == 1:
+            return [self._execute_one(actions[0], env=env, state=state)]
+
+        # Respect ActionExecutionPolicy.mode
+        if self.policy.mode == "serial":
+            return [self._execute_one(a, env=env, state=state) for a in actions]
+
+        # Auto/parallel mode: classify and run safe tools in parallel
+        safe_indices, exclusive_indices = self._classify_actions(actions)
+        if len(safe_indices) >= 2:
+            return self._execute_concurrent(
+                actions, env=env, state=state,
+                safe_indices=safe_indices,
+                exclusive_indices=exclusive_indices,
+            )
+
+        # All exclusive or only one safe: run sequentially
         return [self._execute_one(action, env=env, state=state) for action in actions]
 
-    def _execute_parallel(
-        self, actions: Sequence[Action], env: Optional[Env] = None, state: Any = None
+    def _classify_actions(
+        self, actions: Sequence[Action]
+    ) -> Tuple[List[int], List[int]]:
+        """Classify actions into concurrency-safe and exclusive."""
+        safe_indices: List[int] = []
+        exclusive_indices: List[int] = []
+        for i, action in enumerate(actions):
+            if self._is_concurrency_safe(action.name):
+                safe_indices.append(i)
+            else:
+                exclusive_indices.append(i)
+        return safe_indices, exclusive_indices
+
+    def _is_concurrency_safe(self, tool_name: str) -> bool:
+        """Check if a tool is safe to run concurrently.
+
+        Priority:
+        1. Tools with needs_approval=True are NEVER concurrency safe
+        2. ToolSpec.concurrency_safe=True → safe
+        3. ToolSpec.read_only=True → safe
+        4. Fallback to legacy _CONCURRENCY_SAFE_TOOLS set
+        """
+        tool = self._resolve_tool(tool_name)
+        if tool is not None and hasattr(tool, "spec"):
+            spec = tool.spec
+            # Tools needing approval are NEVER concurrency safe
+            if getattr(spec, "needs_approval", False):
+                return False
+            if getattr(spec, "concurrency_safe", False):
+                return True
+            if getattr(spec, "read_only", False):
+                return True
+        # Fallback: check legacy hardcoded set
+        return tool_name in _CONCURRENCY_SAFE_TOOLS
+
+    def _execute_concurrent(
+        self,
+        actions: Sequence[Action],
+        env: Optional[Env] = None,
+        state: Any = None,
+        safe_indices: List[int] | None = None,
+        exclusive_indices: List[int] | None = None,
     ) -> List[ActionResult]:
-        results: List[ActionResult] = []
-        pending_batch: List[Action] = []
+        """Execute actions with concurrency-safe tools running in parallel.
 
-        def _flush_batch() -> None:
-            nonlocal pending_batch
-            if not pending_batch:
-                return
-            max_workers = min(
-                max(1, int(self.policy.max_concurrency)),
-                len(pending_batch),
-            )
-            with ThreadPoolExecutor(max_workers=max_workers) as pool:
-                futures = [
-                    pool.submit(self._execute_one, action, env=env, state=state)
-                    for action in pending_batch
-                ]
-                results.extend(future.result() for future in futures)
-            pending_batch = []
+        Read-only/concurrency-safe tools are run concurrently.
+        Exclusive tools (write, approval-gated) are run sequentially.
+        Results are returned in the original order.
+        """
+        if safe_indices is None or exclusive_indices is None:
+            safe_indices, exclusive_indices = self._classify_actions(actions)
 
-        for action in actions:
-            if self._can_execute_in_parallel(action):
-                pending_batch.append(action)
-                continue
-            _flush_batch()
-            results.append(self._execute_one(action, env=env, state=state))
+        # If all actions are exclusive or only one safe action, run sequentially
+        if len(safe_indices) <= 1:
+            return [self._execute_one(action, env=env, state=state) for action in actions]
 
-        _flush_batch()
-        return results
+        # Run safe actions in parallel, exclusive actions sequentially
+        results: List[Optional[ActionResult]] = [None] * len(actions)
 
-    def _can_execute_in_parallel(self, action: Action) -> bool:
-        tool = self._resolve_tool(action.name)
-        if tool is None:
-            return False
-        spec = getattr(tool, "spec", None)
-        if spec is None:
-            return False
-        return bool(getattr(spec, "read_only", False) and getattr(spec, "concurrency_safe", False))
+        max_workers = min(
+            max(1, self.policy.max_concurrency),
+            len(safe_indices),
+        )
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            futures: Dict[Any, int] = {}
+            for idx in safe_indices:
+                future = pool.submit(self._execute_one, actions[idx], env=env, state=state)
+                futures[future] = idx
+            for future in as_completed(futures):
+                idx = futures[future]
+                results[idx] = future.result()
+                # fail_fast: cancel remaining on first error
+                if self.policy.fail_fast and results[idx] is not None:
+                    if getattr(results[idx], "status", None) == ActionStatus.ERROR:
+                        for pending in list(futures.keys()):
+                            if not pending.done():
+                                pending.cancel()
+                        break
+
+        # Execute exclusive (write/bash/approval) actions sequentially
+        for idx in exclusive_indices:
+            results[idx] = self._execute_one(actions[idx], env=env, state=state)
+
+        # All slots should be filled
+        return [r if r is not None else self._error_result(actions[i], "concurrent_execution_failed") for i, r in enumerate(results)]
+
+    def _error_result(self, action: Action, message: str) -> ActionResult:
+        """Create an error ActionResult for a failed concurrent execution slot."""
+        return ActionResult(
+            name=action.name,
+            status=ActionStatus.ERROR,
+            output=None,
+            error=message,
+            action_id=action.action_id,
+            attempts=1,
+            latency_ms=0.0,
+            metadata={"error_category": "concurrent_execution_error"},
+        )
 
     def _execute_one(
         self, action: Action, env: Optional[Env] = None, state: Any = None
@@ -83,31 +193,74 @@ class ActionExecutor:
         tool_meta = self._tool_meta(action.name)
         runtime_context = self._build_runtime_context(action.name, env=env, state=state)
 
-        while attempts <= action.max_retries:
+        # Resolve per-tool retry_policy and on_failure from tool spec
+        _retry_policy = None
+        _on_failure = None
+        tool_preview = self._resolve_tool(action.name)
+        if tool_preview is not None and hasattr(tool_preview, 'spec'):
+            _retry_policy = getattr(tool_preview.spec, 'retry_policy', None)
+            _on_failure = getattr(tool_preview.spec, 'on_failure', None)
+
+        # 1. Interceptor before_execute — can modify action args
+        interceptor_context = InterceptorContext(
+            tool_name=action.name,
+            tool_args=dict(action.args),
+            step_id=getattr(state, "current_step", 0) if state else 0,
+            state=self._engine,
+            run_id=getattr(self._engine, "_active_run_id", "") if self._engine else "",
+        )
+        if self._interceptor_chain is not None:
+            action = self._interceptor_chain.before_execute(action, interceptor_context)
+
+        # 2. Check needs_approval — triggers interrupt() for human approval
+        _auto_approved = False
+        if tool_preview is not None and hasattr(tool_preview, 'spec'):
+            _needs_approval_val = getattr(tool_preview.spec, 'needs_approval', False)
+            if _needs_approval_val:
+                if callable(_needs_approval_val) and not isinstance(_needs_approval_val, bool):
+                    _needs_approval_val = _needs_approval_val(runtime_context, action.args)
+            if _needs_approval_val:
+                if self.auto_approve:
+                    _auto_approved = True
+                else:
+                    from ..engine.interrupt import interrupt
+                    from ..engine.approval import ToolApprovalItem
+
+                    approval_item = ToolApprovalItem(
+                        tool_name=action.name,
+                        tool_args=action.args,
+                        message=f"Tool '{action.name}' requires approval before execution.",
+                    )
+                    approval = interrupt(approval_item)
+                    if approval == "deny":
+                        return self._finish_result(
+                            action=action,
+                            status=ActionStatus.SKIPPED,
+                            start=start,
+                            attempts=1,
+                            tool_meta=tool_meta,
+                            output={"status": "denied", "message": "User denied approval"},
+                            extra_metadata={"error_category": "approval_denied"},
+                        )
+
+        # Compute effective max attempts from retry_policy or fallback to max_retries
+        if _retry_policy is not None:
+            _max_attempts = _retry_policy.max_attempts
+            _backoff_factor = _retry_policy.backoff_factor
+            _max_backoff = _retry_policy.max_backoff
+            _jitter = _retry_policy.jitter
+            _retryable_exceptions = _retry_policy.retryable_exceptions
+        else:
+            _max_attempts = action.max_retries + 1  # existing behavior
+            _backoff_factor = 0
+            _max_backoff = 0
+            _jitter = False
+            _retryable_exceptions = (Exception,)
+
+        while attempts < _max_attempts:
             attempts += 1
             try:
                 tool = self._resolve_tool(action.name)
-                guard_message = self._candidate_submit_ready_guard(action.name, state)
-                if guard_message:
-                    return self._finish_result(
-                        action=action,
-                        status=ActionStatus.ERROR,
-                        start=start,
-                        attempts=attempts,
-                        tool_meta=tool_meta,
-                        output={
-                            "status": "error",
-                            "message": guard_message,
-                            "error_category": "candidate_submit_ready_guard",
-                            "tool": action.name,
-                        },
-                        error=guard_message,
-                        extra_metadata={
-                            "error_category": "candidate_submit_ready_guard",
-                            "progress_count": len(runtime_context["progress_events"]),
-                            "artifacts": list(runtime_context["artifacts"]),
-                        },
-                    )
                 validation = self._validate(tool, action.args, runtime_context)
                 if not validation.valid:
                     return self._finish_result(
@@ -128,8 +281,17 @@ class ActionExecutor:
                         },
                     )
 
+                # Read-before-write check for file editing tools
+                rbw_blocked = self._check_read_before_write(action)
+                if rbw_blocked is not None:
+                    return rbw_blocked
+
                 permission = self._check_permissions(tool, action.args, runtime_context)
                 if permission.decision == "deny":
+                    self._dispatch_tool_hook(
+                        "on_permission_denied", action.name, action.args,
+                        tool_result=None, permission_decision="deny",
+                    )
                     return self._finish_result(
                         action=action,
                         status=ActionStatus.SKIPPED,
@@ -147,6 +309,45 @@ class ActionExecutor:
                         },
                     )
                 if permission.decision == "ask":
+                    # Try interactive resolution if callback is set
+                    if self._permission_interaction_callback is not None:
+                        try:
+                            user_decision = self._permission_interaction_callback(
+                                tool_name=action.name,
+                                args=action.args,
+                                permission=permission,
+                            )
+                            if user_decision == "allow":
+                                permission = ToolPermissionDecision.allow()
+                            elif user_decision == "deny":
+                                self._dispatch_tool_hook(
+                                    "on_permission_denied", action.name, action.args,
+                                    tool_result=None, permission_decision="deny",
+                                )
+                                return self._finish_result(
+                                    action=action,
+                                    status=ActionStatus.SKIPPED,
+                                    start=start,
+                                    attempts=attempts,
+                                    tool_meta=tool_meta,
+                                    output={
+                                        "status": "denied",
+                                        "message": "User denied permission",
+                                        "scope": permission.scope,
+                                    },
+                                    extra_metadata={
+                                        "error_category": "permission_denied",
+                                        "permission": self._permission_payload(permission),
+                                    },
+                                )
+                            # else: fall through to SKIPPED
+                        except Exception:
+                            pass  # Callback failed, fall through to SKIPPED
+
+                    self._dispatch_tool_hook(
+                        "on_permission_denied", action.name, action.args,
+                        tool_result=None, permission_decision="ask",
+                    )
                     return self._finish_result(
                         action=action,
                         status=ActionStatus.SKIPPED,
@@ -165,35 +366,69 @@ class ActionExecutor:
                     )
 
                 effective_args = dict(permission.updated_args or action.args)
+                self._dispatch_tool_hook(
+                    "on_before_tool_use", action.name, effective_args,
+                    tool_result=None, permission_decision=permission.decision,
+                )
                 output = self._call_tool(
                     tool, action.name, effective_args, runtime_context=runtime_context
                 )
+                self._dispatch_tool_hook(
+                    "on_after_tool_use", action.name, effective_args,
+                    tool_result=output, permission_decision=permission.decision,
+                )
+                # Track reads / invalidate writes for read-before-write
+                self._track_file_access(action.name, effective_args, output)
                 normalized_output = self._normalize_output(tool, output)
                 latency = (time.monotonic() - start) * 1000
-                return ActionResult(
+                result_metadata = {
+                    **tool_meta,
+                    "error_category": None,
+                    "permission": self._permission_payload(permission),
+                    "progress_count": len(runtime_context["progress_events"]),
+                    "artifacts": list(runtime_context["artifacts"]),
+                }
+                if _auto_approved:
+                    result_metadata["auto_approved"] = True
+                    result_metadata["approval_required"] = True
+                result = ActionResult(
                     name=action.name,
                     status=ActionStatus.SUCCESS,
                     output=normalized_output,
                     action_id=action.action_id,
                     attempts=attempts,
                     latency_ms=latency,
-                    metadata={
-                        **tool_meta,
-                        "error_category": None,
-                        "permission": self._permission_payload(permission),
-                        "progress_count": len(runtime_context["progress_events"]),
-                        "artifacts": list(runtime_context["artifacts"]),
-                    },
+                    metadata=result_metadata,
                 )
+                # 6. Interceptor after_execute — can modify result
+                if self._interceptor_chain is not None:
+                    result = self._interceptor_chain.after_execute(action, result, interceptor_context)
+                return result
             except Exception as exc:  # pragma: no cover - defensive path
                 last_error = str(exc)
-                if attempts > action.max_retries:
+                # Check if this exception type is retryable
+                if not isinstance(exc, _retryable_exceptions):
                     break
+                # Exponential backoff with optional jitter
+                if attempts < _max_attempts and _backoff_factor > 0:
+                    import random
+                    delay = min(_backoff_factor * (2 ** (attempts - 1)), _max_backoff)
+                    if _jitter:
+                        delay = delay * (0.5 + random.random())
+                    time.sleep(delay)
 
         error_category = "runtime_error"
         if last_error and "not found" in last_error.lower():
             error_category = "tool_not_found"
-        return self._finish_result(
+
+        # Call on_failure callback if registered
+        if _on_failure is not None:
+            try:
+                _on_failure(action=action, error=last_error, attempts=attempts)
+            except Exception:
+                pass  # on_failure must not raise
+
+        error_result = self._finish_result(
             action=action,
             status=ActionStatus.ERROR,
             start=start,
@@ -206,6 +441,10 @@ class ActionExecutor:
                 "artifacts": list(runtime_context["artifacts"]),
             },
         )
+        # Interceptor after_execute on error path too
+        if self._interceptor_chain is not None:
+            error_result = self._interceptor_chain.after_execute(action, error_result, interceptor_context)
+        return error_result
 
     def _finish_result(
         self,
@@ -257,6 +496,10 @@ class ActionExecutor:
             "artifacts": artifacts,
             "emit_progress": _emit_progress,
             "record_artifact": _record_artifact,
+            "delegate_depth": self.delegate_depth,
+            "parent_run_id": "",
+            "trace_writer": self.trace_writer,
+            "shared_memory": self.shared_memory,
         }
 
     def _resolve_tool(self, name: str) -> Optional[BaseTool]:
@@ -294,6 +537,16 @@ class ActionExecutor:
         args: Dict[str, Any],
         runtime_context: Dict[str, Any],
     ) -> ToolPermissionDecision:
+        # Use permission pipeline if available
+        if self._pipeline is not None:
+            tool_spec = getattr(tool, "spec", None) if tool is not None else None
+            return self._pipeline.evaluate(
+                tool_name=getattr(tool, "name", "") if tool else "",
+                args=dict(args),
+                tool_spec=tool_spec,
+                runtime_context=runtime_context,
+            )
+        # Fallback: use tool's own permission check
         if tool is None or not hasattr(tool, "check_permissions"):
             return ToolPermissionDecision.allow()
         result = tool.check_permissions(dict(args), runtime_context=runtime_context)
@@ -339,43 +592,6 @@ class ActionExecutor:
         raise TypeError(
             "Unsupported tool registry. Expected object with call() or get()."
         )
-
-    def _candidate_submit_ready_guard(self, name: str, state: Any) -> str:
-        if name == "submit_poc":
-            return ""
-        if not bool(getattr(state, "candidate_ready_for_submit", False)):
-            return ""
-        poc_path = str(getattr(state, "poc_path", "") or "").strip()
-        if not poc_path:
-            return ""
-        if self._candidate_ready_file_missing(state, poc_path):
-            return ""
-        return (
-            "Candidate is ready for submission. Call submit_poc now; "
-            f"{name} is blocked until the ready candidate is submitted."
-        )
-
-    @staticmethod
-    def _candidate_ready_file_missing(state: Any, poc_path: str) -> bool:
-        path = Path(poc_path)
-        candidates: List[Path] = []
-        if path.is_absolute():
-            candidates.append(path)
-        else:
-            workspace_root = str(getattr(state, "workspace_root", "") or "").strip()
-            if workspace_root:
-                candidates.append(Path(workspace_root) / path)
-            candidates.append(path)
-
-        saw_checkable_path = False
-        for candidate in candidates:
-            try:
-                saw_checkable_path = True
-                if candidate.is_file():
-                    return False
-            except OSError:
-                continue
-        return saw_checkable_path
 
     def _normalize_output(self, tool: Optional[BaseTool], output: Any) -> Any:
         if tool is None:
@@ -485,3 +701,105 @@ class ActionExecutor:
             "toolset_version": None,
             "source": "unknown",
         }
+
+    def _dispatch_tool_hook(
+        self,
+        hook_method: str,
+        tool_name: str,
+        tool_args: Dict[str, Any],
+        tool_result: Any = None,
+        permission_decision: Optional[str] = None,
+    ) -> None:
+        """Dispatch a tool-level hook to all registered engine hooks."""
+        if self._engine is None:
+            return
+        hooks = getattr(self._engine, "hooks", None)
+        if not hooks:
+            return
+        from .hooks import ToolHookContext
+        ctx = ToolHookContext(
+            task="",
+            step_id=0,
+            phase=RuntimePhase.ACT,
+            state=None,
+            tool_name=tool_name,
+            tool_args=tool_args,
+            tool_result=tool_result,
+            permission_decision=permission_decision,
+        )
+        for hook in hooks:
+            method = getattr(hook, hook_method, None)
+            if method is not None:
+                try:
+                    method(ctx, self._engine)
+                except Exception:
+                    pass
+
+    # ── Read-before-write support ──────────────────────────────────────────────
+
+    _WRITE_TOOL_NAMES = frozenset({
+        "file_edit_v2", "write_file", "Edit", "Write",
+        "str_replace", "insert", "replace_lines", "append_file",
+    })
+
+    _READ_TOOL_NAMES = frozenset({
+        "file_read_v2", "read_file", "Read", "view",
+    })
+
+    def _check_read_before_write(self, action: Action) -> Optional[ActionResult]:
+        """Check read-before-write enforcement for file editing tools.
+
+        Returns an ActionResult if the action should be blocked, None otherwise.
+        """
+        if self._rbw_enforcer is None:
+            return None
+        if action.name not in self._WRITE_TOOL_NAMES:
+            return None
+
+        path = action.args.get("path") or action.args.get("file_path", "")
+        if not path:
+            return None
+
+        allowed, reason = self._rbw_enforcer.check_write(path)
+        if allowed:
+            return None
+
+        start = time.monotonic()
+        return self._finish_result(
+            action=action,
+            status=ActionStatus.SKIPPED,
+            start=start,
+            attempts=1,
+            tool_meta=self._tool_meta(action.name),
+            output={
+                "status": "error",
+                "message": reason,
+                "error_category": "read_before_write",
+            },
+            extra_metadata={
+                "error_category": "read_before_write",
+            },
+        )
+
+    def _track_file_access(
+        self, tool_name: str, args: Dict[str, Any], output: Any
+    ) -> None:
+        """Track file reads and invalidate cache on writes for RBW enforcement."""
+        if self._rbw_enforcer is None:
+            return
+
+        # Record successful file reads
+        if tool_name in self._READ_TOOL_NAMES:
+            path = args.get("path") or args.get("file_path", "")
+            if path and isinstance(output, dict):
+                content = output.get("content", "")
+                if content:
+                    self._rbw_enforcer.record_read(path, content)
+                elif isinstance(output, str) and output:
+                    self._rbw_enforcer.record_read(path, output)
+
+        # Invalidate cache after successful writes
+        if tool_name in self._WRITE_TOOL_NAMES:
+            path = args.get("path") or args.get("file_path", "")
+            if path:
+                self._rbw_enforcer.invalidate(path)

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import html
 import json
+import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import mimetypes
 from pathlib import Path
@@ -12,7 +13,41 @@ from typing import Any, Dict, List, Optional
 from urllib.parse import parse_qs, urlparse
 
 
+# ---------------------------------------------------------------------------
+# Design tokens — DESIGN.md Linear-inspired visual system
+# ---------------------------------------------------------------------------
+
+_DESIGN_HEAD = """\
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">"""
+
+_DESIGN_TOKENS = """\
+:root{
+  --bg:#010102;--surface-1:#0f1011;--surface-2:#141516;--surface-3:#18191a;--surface-4:#191a1b;
+  --accent:#5e6ad2;--accent-hover:#828fff;--accent-focus:#5e69d1;
+  --txt:#f7f8f8;--muted:#d0d6e0;--subtle:#8a8f98;--tertiary:#62666d;
+  --line:#23252a;--line-strong:#34343a;--line-tertiary:#3e3e44;
+  --ok:#27a644;--err:#e5484d;--warn:#e5c100;
+  --kind-thinking:#8b8fe0;--kind-action:#2da46a;--kind-observation:#5a8fbf;
+  --kind-critic:#bfa04e;--kind-handoff:#bfa04e;--kind-delegation:#6b8fc4;
+  --kind-fanout:#9b7fd4;--kind-parser:#bfa04e;--kind-memory:#3da89c;
+  --kind-done:#c47070;--kind-error:#e5484d;--kind-other:#5a6578;--kind-plan:#7a80cc;
+  --radius-xs:4px;--radius-sm:6px;--radius-md:8px;--radius-lg:12px;--radius-xl:16px;--radius-pill:9999px;
+  --font-body:'Inter','SF Pro Display',-apple-system,system-ui,'Segoe UI',Roboto,sans-serif;
+  --font-mono:'JetBrains Mono','Geist Mono',ui-monospace,'SF Mono',Menlo,monospace;
+}"""
+
+_DESIGN_FONT_BODY = "var(--font-body)"
+_DESIGN_FONT_MONO = "var(--font-mono)"
+
+
 def main(argv: Optional[List[str]] = None) -> int:
+    args = list(sys.argv[1:] if argv is None else argv)
+    if args and args[0] == "--version":
+        from qitos import __version__
+        print(f"qita {__version__}")
+        return 0
     parser = argparse.ArgumentParser(prog="qita", description="QitOS trace tools")
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -30,7 +65,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     p_export.add_argument("--run", required=True, help="Run directory path")
     p_export.add_argument("--html", required=True, help="Output html file path")
 
-    args = parser.parse_args(argv)
+    args = parser.parse_args(args)
     if args.command == "board":
         return _cmd_board(
             logdir=args.logdir,
@@ -120,6 +155,23 @@ def _build_handler(root: Path):
                     )
                 )
                 return
+            if route.startswith("/compare-branches/"):
+                # /compare-branches/{run_id}/{step_id}
+                parts = route.split("/")
+                if len(parts) >= 4:
+                    cb_run_id = _slug_run_id(parts[2])
+                    cb_step_id = parts[3]
+                    cb_dir = _resolve_run(root, cb_run_id)
+                    if cb_dir is None:
+                        self._send_html(_render_not_found(cb_run_id), status=404)
+                        return
+                    cb_payload = _load_run_payload(cb_dir)
+                    self._send_html(
+                        _render_branch_comparison_html(cb_payload, cb_step_id)
+                    )
+                    return
+                self._send_html(_render_compare_prompt(), status=400)
+                return
             if route == "/api/runs":
                 self._send_json(_discover_runs(root))
                 return
@@ -154,6 +206,26 @@ def _build_handler(root: Path):
                     )
                     return
                 self._send_json(_load_run_payload(run_dir))
+                return
+            if route.startswith("/api/stream/"):
+                run_id = _slug_run_id(route.split("/", 3)[-1])
+                run_dir = _resolve_run(root, run_id)
+                if run_dir is None:
+                    self._send_json(
+                        {"error": "run not found", "run_id": run_id}, status=404
+                    )
+                    return
+                self._send_sse_events(run_dir)
+                return
+            if route.startswith("/api/live/"):
+                run_id = _slug_run_id(route.split("/", 3)[-1])
+                run_dir = _resolve_run(root, run_id)
+                if run_dir is None:
+                    self._send_json(
+                        {"error": "run not found", "run_id": run_id}, status=404
+                    )
+                    return
+                self._send_live_sse(run_dir)
                 return
             if route == "/asset":
                 path = str((qs.get("path") or [""])[0]).strip()
@@ -266,6 +338,77 @@ def _build_handler(root: Path):
                 return
             self._send_json({"error": "not found", "route": route}, status=404)
 
+        def do_POST(self) -> None:  # noqa: N802
+            parsed = urlparse(self.path)
+            route = parsed.path
+
+            # POST /api/fork/{run_id}/{step_id}
+            import re as _re
+            fork_match = _re.match(r"^/api/fork/([^/]+)/(\d+)$", route)
+            if fork_match:
+                run_id = _slug_run_id(fork_match.group(1))
+                step_id = int(fork_match.group(2))
+                # Read body
+                content_length = int(self.headers.get("Content-Length", 0))
+                body_bytes = self.rfile.read(content_length) if content_length > 0 else b""
+                try:
+                    body = json.loads(body_bytes.decode("utf-8")) if body_bytes else {}
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    body = {}
+
+                override_decision = body.get("override_decision")
+                override_observation = body.get("override_observation")
+
+                # Resolve run directory
+                run_dir = None
+                for candidate in _discover_runs(logdir_root):
+                    if candidate.get("run_id") == run_id or Path(candidate.get("path", "")).name == run_id:
+                        run_dir = Path(candidate["path"])
+                        break
+
+                if run_dir is None or not run_dir.is_dir():
+                    self._send_json({"error": f"Run not found: {run_id}"}, status=404)
+                    return
+
+                # Use ReplaySession to fork
+                from qitos.debug.replay import ReplaySession
+                try:
+                    session = ReplaySession(str(run_dir))
+                    override = {}
+                    if override_decision:
+                        override["decision"] = override_decision
+                    if override_observation:
+                        override["observation"] = override_observation
+                    forked = session.fork_with_step_override(step_id, override)
+                except Exception as exc:
+                    self._send_json({"error": str(exc)}, status=500)
+                    return
+
+                # Write forked run as a new run directory
+                fork_run_id = f"{run_id}_fork_s{step_id}"
+                fork_dir = run_dir.parent / fork_run_id
+                fork_dir.mkdir(parents=True, exist_ok=True)
+                if "manifest" in forked:
+                    (fork_dir / "manifest.json").write_text(
+                        json.dumps(forked["manifest"], ensure_ascii=False, indent=2),
+                        encoding="utf-8",
+                    )
+                if "events" in forked:
+                    lines = [json.dumps(e, ensure_ascii=False) for e in forked["events"]]
+                    (fork_dir / "events.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+                if "steps" in forked:
+                    lines = [json.dumps(s, ensure_ascii=False) for s in forked["steps"]]
+                    (fork_dir / "steps.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+                self._send_json({
+                    "fork_run_id": fork_run_id,
+                    "fork_dir": str(fork_dir),
+                    "step_id": step_id,
+                })
+                return
+
+            self._send_json({"error": "not found", "route": route}, status=404)
+
         def log_message(self, fmt: str, *args: Any) -> None:
             # Keep console clean; qita already prints startup summary.
             _ = fmt
@@ -301,6 +444,164 @@ def _build_handler(root: Path):
             self.end_headers()
             self.wfile.write(body)
 
+        def _send_sse_events(self, run_dir: Path) -> None:
+            """Stream run events as Server-Sent Events for real-time UI updates."""
+            import time as _time
+
+            payload = _load_run_payload(run_dir)
+            steps = payload.get("steps", [])
+            events = payload.get("events", [])
+
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "keep-alive")
+            self.send_header("X-Accel-Buffering", "no")
+            self.end_headers()
+
+            # Emit run_start
+            self._sse_write("run_start", {
+                "run_id": payload.get("run_id", ""),
+                "task": payload.get("task", ""),
+                "agent_name": payload.get("agent_name", ""),
+            })
+
+            # Emit step events with small delays for visual effect
+            for step in steps:
+                step_id = step.get("step_id", 0)
+                agent_id = step.get("agent_id")
+                self._sse_write("step_start", {
+                    "step_id": step_id,
+                    "agent_id": agent_id,
+                })
+
+                # Emit phase events for this step
+                step_events = [
+                    e for e in events
+                    if e.get("step_id") == step_id
+                ]
+                for event in step_events:
+                    phase = event.get("phase", "")
+                    if "HANDOFF" in phase:
+                        self._sse_write("handoff", event)
+                    elif "DELEGATE" in phase:
+                        self._sse_write("delegate", event)
+                    elif "FANOUT" in phase:
+                        self._sse_write("fanout", event)
+                    else:
+                        self._sse_write("phase", event)
+
+                self._sse_write("step_end", {
+                    "step_id": step_id,
+                    "agent_id": agent_id,
+                })
+
+            # Emit run_end
+            self._sse_write("run_end", {
+                "step_count": len(steps),
+                "stop_reason": payload.get("stop_reason", ""),
+            })
+
+        def _sse_write(self, event_type: str, data: Any) -> None:
+            """Write a single SSE event to the response stream."""
+            import struct
+
+            payload = json.dumps(data, ensure_ascii=False, default=str)
+            msg = f"event: {event_type}\ndata: {payload}\n\n"
+            try:
+                self.wfile.write(msg.encode("utf-8"))
+                self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError, struct.error):
+                pass
+
+        def _send_live_sse(self, run_dir: Path) -> None:
+            """Tail events.jsonl for a running run and push new lines as SSE events."""
+            import struct
+            import time as _time
+
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "keep-alive")
+            self.send_header("X-Accel-Buffering", "no")
+            self.end_headers()
+
+            events_path = run_dir / "events.jsonl"
+            sent = 0
+            max_poll = 300  # 5 minutes at 1s intervals
+
+            # First, emit any existing events
+            if events_path.exists():
+                for line in events_path.read_text(encoding="utf-8").splitlines():
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        event = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    phase = str(event.get("phase", "unknown")).upper()
+                    event_type = "phase"
+                    if "HANDOFF" in phase:
+                        event_type = "handoff"
+                    elif "DELEGATE" in phase:
+                        event_type = "delegate"
+                    elif "FANOUT" in phase:
+                        event_type = "fanout"
+                    self._sse_write(event_type, event)
+                    sent += 1
+
+            # Now tail for new events
+            for _ in range(max_poll):
+                _time.sleep(1.0)
+                if not events_path.exists():
+                    continue
+                try:
+                    lines = events_path.read_text(encoding="utf-8").splitlines()
+                except OSError:
+                    continue
+                new_lines = lines[sent:]
+                for line in new_lines:
+                    line = line.strip()
+                    if not line:
+                        sent += 1
+                        continue
+                    try:
+                        event = json.loads(line)
+                    except json.JSONDecodeError:
+                        sent += 1
+                        continue
+                    phase = str(event.get("phase", "unknown")).upper()
+                    event_type = "phase"
+                    if "HANDOFF" in phase:
+                        event_type = "handoff"
+                    elif "DELEGATE" in phase:
+                        event_type = "delegate"
+                    elif "FANOUT" in phase:
+                        event_type = "fanout"
+                    self._sse_write(event_type, event)
+                    sent += 1
+
+                # Check if run is completed
+                manifest_path = run_dir / "manifest.json"
+                if manifest_path.exists():
+                    try:
+                        manifest = json.loads(
+                            manifest_path.read_text(encoding="utf-8")
+                        )
+                        status = str(manifest.get("status", "")).lower()
+                        if status in ("completed", "success", "failed", "error", "stopped"):
+                            self._sse_write("run_end", {
+                                "status": status,
+                                "stop_reason": (manifest.get("summary") or {}).get("stop_reason", ""),
+                            })
+                            return
+                    except (json.JSONDecodeError, OSError):
+                        pass
+
+            # Timeout
+            self._sse_write("run_end", {"status": "timeout", "stop_reason": "live_stream_timeout"})
+
     return QitaHandler
 
 
@@ -327,6 +628,12 @@ def _discover_runs(logdir: Path) -> List[Dict[str, Any]]:
             continue
         manifest = _load_json(manifest_path)
         summary = manifest.get("summary") or {}
+        agent_topology = manifest.get("agent_topology")
+        agent_names = []
+        if isinstance(agent_topology, dict):
+            agent_names = agent_topology.get("agents", [])
+        elif manifest.get("agent_name"):
+            agent_names = [manifest["agent_name"]]
         runs.append(
             {
                 "id": p.name,
@@ -337,6 +644,10 @@ def _discover_runs(logdir: Path) -> List[Dict[str, Any]]:
                 "event_count": manifest.get("event_count", 0),
                 "stop_reason": summary.get("stop_reason"),
                 "final_result": summary.get("final_result"),
+                "agent_name": manifest.get("agent_name"),
+                "agent_topology": agent_topology,
+                "handoff_count": manifest.get("handoff_count"),
+                "agent_count": len(agent_names) if agent_names else 0,
                 "manifest_meta": {
                     "schema_version": manifest.get("schema_version"),
                     "model_id": manifest.get("model_id"),
@@ -607,34 +918,37 @@ def _render_board_html() -> str:
     return """<!doctype html>
 <html><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>qita board</title>
+""" + _DESIGN_HEAD + """
 <style>
-:root{--bg:#090d16;--panel:#10192a;--panel2:#0d1422;--line:#1f2f4d;--txt:#e7edf9;--muted:#9fb0d4;--ok:#3dd68c;--warn:#f7b955;--bad:#ff6b6b;--accent:#4db5ff}
-*{box-sizing:border-box} body{margin:0;font-family:ui-sans-serif,system-ui;background:radial-gradient(circle at 20% 0%,#132340 0,#090d16 60%);color:var(--txt)}
+""" + _DESIGN_TOKENS + """
+*{box-sizing:border-box} body{margin:0;font-family:var(--font-body);background:var(--bg);color:var(--txt)}
 .wrap{max-width:1320px;margin:0 auto;padding:24px 18px 32px}
 .head{display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:16px}
-.title{font-size:28px;font-weight:800;letter-spacing:.2px}.sub{color:var(--muted);font-size:13px;margin-top:4px}
-.chip{border:1px solid var(--line);background:var(--panel2);border-radius:999px;padding:8px 12px;font-size:12px;color:var(--muted)}
+.title{font-size:28px;font-weight:700;letter-spacing:-.6px}.sub{color:var(--muted);font-size:13px;margin-top:4px}
+.chip{border:1px solid var(--line);background:var(--surface-2);border-radius:var(--radius-pill);padding:8px 12px;font-size:12px;color:var(--muted)}
 .toolbar{display:grid;grid-template-columns:1.2fr .9fr .9fr 1fr 1fr auto auto;gap:10px;margin:12px 0 18px}
-.toolbar input,.toolbar select{border:1px solid var(--line);background:var(--panel2);color:var(--txt);border-radius:10px;padding:9px 10px;font-size:13px}
+.toolbar input,.toolbar select{border:1px solid var(--line);background:var(--surface-1);color:var(--txt);border-radius:var(--radius-md);padding:9px 10px;font-size:13px}
 .toolbar label{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted)}
 .toolbar .btn{justify-content:center}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:14px}
-.card{background:linear-gradient(180deg,rgba(255,255,255,.03),rgba(255,255,255,.00));border:1px solid var(--line);border-radius:14px;padding:14px;box-shadow:0 10px 30px rgba(0,0,0,.15)}
+.card{background:var(--surface-1);border:1px solid var(--line);border-radius:var(--radius-lg);padding:14px}
 .id{font-weight:700;font-size:16px}
 .meta{font-size:12px;color:var(--muted);margin-top:6px}
 .row{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
-.btn{display:inline-flex;align-items:center;border:1px solid var(--line);color:var(--txt);background:#13203a;padding:6px 10px;border-radius:8px;font-size:12px;text-decoration:none;cursor:pointer}
+.btn{display:inline-flex;align-items:center;border:1px solid var(--line);color:var(--txt);background:var(--surface-1);padding:6px 10px;border-radius:var(--radius-md);font-size:12px;text-decoration:none;cursor:pointer}
 .btn:hover{border-color:var(--accent)}
-.state{display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;background:#13342b;color:var(--ok);border:1px solid #1d5f4b}
-.manifest-mini{margin-top:8px;border:1px dashed #27416a;border-radius:10px;padding:8px;background:#0d182c}
+.state{display:inline-block;padding:2px 8px;border-radius:var(--radius-pill);font-size:11px;background:var(--surface-2);color:var(--ok);border:1px solid var(--line)}
+.manifest-mini{margin-top:8px;border:1px dashed var(--line-strong);border-radius:var(--radius-md);padding:8px;background:var(--surface-1)}
 .manifest-mini .meta{margin-top:2px}
-.manifest-meta-tree{margin-top:6px;padding-top:6px;border-top:1px dashed #27416a}
+.manifest-meta-tree{margin-top:6px;padding-top:6px;border-top:1px dashed var(--line-strong)}
 .manifest-meta-tree details{margin:4px 0}
-.manifest-meta-tree summary{cursor:pointer;color:#b7cdf4;font-size:12px}
+.manifest-meta-tree summary{cursor:pointer;color:var(--muted);font-size:12px}
 .manifest-meta-leaf{display:grid;grid-template-columns:110px 1fr;gap:8px;margin:4px 0}
-.manifest-meta-k{font-size:11px;color:#8ea4cf}
-.manifest-meta-v{font-size:11px;color:#dce8ff;word-break:break-word}
-.empty{padding:18px;border:1px dashed var(--line);border-radius:12px;color:var(--muted)}
+.manifest-meta-k{font-size:11px;color:var(--subtle)}
+.manifest-meta-v{font-size:11px;color:var(--txt);word-break:break-word}
+.empty{padding:18px;border:1px dashed var(--line);border-radius:var(--radius-lg);color:var(--muted)}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}
+.live-dot{display:inline-block;width:8px;height:8px;border-radius:9999px;background:var(--ok);animation:pulse 1.5s ease infinite;margin-right:6px;vertical-align:middle}
 @media (max-width:980px){.toolbar{grid-template-columns:1fr 1fr}}
 </style></head>
 <body>
@@ -662,6 +976,18 @@ def _render_board_html() -> str:
     <button class="btn" id="refresh">Refresh</button>
   </div>
   <div id="stats" class="grid" style="grid-template-columns:repeat(auto-fill,minmax(240px,1fr));margin-bottom:12px"></div>
+  <section id="trendSection" style="margin-bottom:14px;display:none">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
+      <span style="font-size:13px;font-weight:600;color:var(--txt)">trend</span>
+      <select id="trendMetric" style="border:1px solid var(--line);background:var(--surface-1);color:var(--txt);border-radius:var(--radius-md);padding:4px 8px;font-size:12px">
+        <option value="tokens">tokens</option>
+        <option value="steps">steps</option>
+        <option value="runtime">runtime (s)</option>
+        <option value="cost">cost ($)</option>
+      </select>
+    </div>
+    <div id="trendChart" style="background:var(--surface-1);border:1px solid var(--line);border-radius:var(--radius-lg);padding:10px;overflow-x:auto"></div>
+  </section>
   <div id="runs" class="grid"></div>
 </div>
 <script>
@@ -749,12 +1075,20 @@ function paint(){
     const el = document.createElement('div');
     el.className = 'card';
     const status = (r.status || 'unknown');
+    const isRunning = status === 'running';
+    const liveIndicator = isRunning ? '<span class="live-dot"></span>' : '';
     const m = r.manifest_meta || {};
+    const agentCount = r.agent_count || 0;
+    const agentBadge = agentCount > 1 ? `<span class="state" style="background:var(--surface-2);color:var(--accent);border-color:var(--line-strong)">[${agentCount} agents]</span>` : (r.agent_name ? `<span class="state" style="background:var(--surface-2);color:var(--accent);border-color:var(--line-strong)">[${esc(r.agent_name)}]</span>` : '');
+    const handoffBadge = r.handoff_count ? `<span class="state" style="background:var(--surface-2);color:var(--kind-handoff);border-color:var(--line-strong)">handoffs=${r.handoff_count}</span>` : '';
+    const topoInfo = (r.agent_topology && typeof r.agent_topology === 'object') ? (r.agent_topology.type || '') : '';
+    const topoBadge = topoInfo ? `<div class="meta">topology=${esc(topoInfo)}${r.agent_topology.agents ? ' agents=' + esc(r.agent_topology.agents.join(',')) : ''}</div>` : '';
     el.innerHTML = `
-      <div class="id">${r.id}</div>
-      <div class="meta"><span class="state">${status}</span> steps=${r.step_count||0} events=${r.event_count||0}</div>
+      <div class="id">${r.id} ${agentBadge} ${handoffBadge}</div>
+      <div class="meta">${liveIndicator}<span class="state">${status}</span> steps=${r.step_count||0} events=${r.event_count||0}</div>
       <div class="meta">stop=${r.stop_reason||''}</div>
       <div class="meta">updated=${r.updated_at||''}</div>
+      ${topoBadge}
       <div class="manifest-mini">
         <div class="meta">manifest meta</div>
         <div class="meta">model=${m.model_id||''}</div>
@@ -825,6 +1159,52 @@ function ctxPeak(ctx){
   const v = ctxPeakNum(ctx);
   return v ? ((v*100).toFixed(1) + '%') : '-';
 }
+function buildTrendChart(){
+  const el = document.getElementById('trendChart');
+  const section = document.getElementById('trendSection');
+  if(!el || !section) return;
+  if(allRuns.length < 2){ section.style.display = 'none'; return; }
+  section.style.display = '';
+  const metric = document.getElementById('trendMetric').value;
+  const sorted = allRuns.slice().sort((a,b)=>parseTime(a.updated_at)-parseTime(b.updated_at));
+  const pts = sorted.map(function(r){
+    const m = r.manifest_meta || {};
+    let val = 0;
+    if(metric === 'tokens') val = Number(m.token_usage || 0);
+    else if(metric === 'steps') val = Number(r.step_count || 0);
+    else if(metric === 'runtime') val = Number(m.latency_seconds || 0);
+    else if(metric === 'cost') val = Number(m.cost || 0);
+    return {id: r.id || '', val: val};
+  });
+  const maxVal = Math.max(...pts.map(p=>p.val), 1);
+  const w = 900, h = 140, padL = 50, padR = 16, padT = 12, padB = 28;
+  const plotW = w - padL - padR, plotH = h - padT - padB;
+  function xAt(i){ return pts.length === 1 ? padL + plotW/2 : padL + (plotW * i / (pts.length - 1)); }
+  function yAt(v){ return padT + plotH - (v / maxVal) * plotH; }
+  const colors = {tokens:'#5e6ad2', steps:'#3dc9b0', runtime:'#e5c100', cost:'#e5484d'};
+  const color = colors[metric] || '#5e6ad2';
+  let polyPts = [], dots = [], labels = [];
+  for(let i = 0; i < pts.length; i++){
+    const x = xAt(i), y = yAt(pts[i].val);
+    polyPts.push(x+','+y);
+    dots.push('<circle cx="'+x+'" cy="'+y+'" r="3" fill="'+color+'"><title>'+esc(pts[i].id)+': '+pts[i].val+'</title></circle>');
+    if(pts.length <= 20 || i % Math.ceil(pts.length / 20) === 0){
+      labels.push('<text class="gantt-step-label" x="'+x+'" y="'+(h-4)+'" text-anchor="middle" fill="var(--muted)" font-size="9">'+esc(pts[i].id.slice(0,8))+'</text>');
+    }
+  }
+  const gridLines = [];
+  for(let g = 0; g <= 4; g++){
+    const yVal = (maxVal * g / 4);
+    const y = yAt(yVal);
+    gridLines.push('<line x1="'+padL+'" y1="'+y+'" x2="'+(w-padR)+'" y2="'+y+'" stroke="var(--line)" stroke-width="0.5"/>');
+    gridLines.push('<text x="'+(padL-4)+'" y="'+(y+3)+'" text-anchor="end" fill="var(--muted)" font-size="9">'+Math.round(yVal)+'</text>');
+  }
+  el.innerHTML = '<svg viewBox="0 0 '+w+' '+h+'" role="img" aria-label="Trend chart" style="width:100%;max-width:'+w+'px">' +
+    gridLines.join('') +
+    '<polyline points="'+polyPts.join(' ')+'" fill="none" stroke="'+color+'" stroke-width="1.5" stroke-linejoin="round"/>' +
+    dots.join('') + labels.join('') +
+    '</svg>';
+}
 async function loadRuns(){
   const rsp = await fetch('/api/runs');
   const data = await rsp.json();
@@ -835,11 +1215,13 @@ async function loadRuns(){
   statusEl.innerHTML = '<option value="">All status</option>' + Array.from(statusSet).sort().map((s)=>`<option value="${s}">${s}</option>`).join('');
   if(keep){ statusEl.value = keep; }
   paint();
+  buildTrendChart();
 }
 document.getElementById('q').addEventListener('input', paint);
 document.getElementById('status').addEventListener('change', paint);
 document.getElementById('sort').addEventListener('change', paint);
 document.getElementById('compareBtn').addEventListener('click', openCompare);
+document.getElementById('trendMetric').addEventListener('change', buildTrendChart);
 document.getElementById('refresh').addEventListener('click', ()=>loadRuns().catch((e)=>{document.getElementById('runs').innerHTML=`<div class="empty">Load failed: ${e}</div>`;}));
 setInterval(()=>{ if(document.getElementById('auto').checked){ loadRuns().catch(()=>{}); } }, 2500);
 loadRuns().catch((e)=>{document.getElementById('runs').innerHTML=`<div class="empty">Load failed: ${e}</div>`;});
@@ -849,16 +1231,18 @@ loadRuns().catch((e)=>{document.getElementById('runs').innerHTML=`<div class="em
 
 def _render_not_found(run_id: str) -> str:
     safe = html.escape(run_id)
-    return f"""<!doctype html><html><head><meta charset="utf-8"/><title>run not found</title></head>
-<body style="font-family:ui-sans-serif,system-ui;background:#101522;color:#dfe8fb;padding:24px">
-<h2>Run not found: {safe}</h2><a href="/" style="color:#83c4ff">Back to board</a></body></html>"""
+    return f"""<!doctype html><html><head><meta charset="utf-8"/><title>run not found</title>
+<style>{_DESIGN_TOKENS}</style></head>
+<body style="font-family:var(--font-body);background:var(--bg);color:var(--txt);padding:24px">
+<h2>Run not found: {safe}</h2><a href="/" style="color:var(--accent)">Back to board</a></body></html>"""
 
 
 def _render_compare_prompt() -> str:
-    return """<!doctype html><html><head><meta charset="utf-8"/><title>qita compare</title></head>
-<body style="font-family:ui-sans-serif,system-ui;background:#101522;color:#dfe8fb;padding:24px">
+    return f"""<!doctype html><html><head><meta charset="utf-8"/><title>qita compare</title>
+<style>{_DESIGN_TOKENS}</style></head>
+<body style="font-family:var(--font-body);background:var(--bg);color:var(--txt);padding:24px">
 <h2>Missing compare target</h2><p>Provide <code>?left=RUN_A&amp;right=RUN_B</code> to compare two runs.</p>
-<a href="/" style="color:#83c4ff">Back to board</a></body></html>"""
+<a href="/" style="color:var(--accent)">Back to board</a></body></html>"""
 
 
 def _render_diff_html(diff: Dict[str, Any], embedded: bool) -> str:
@@ -907,15 +1291,16 @@ def _render_diff_html(diff: Dict[str, Any], embedded: bool) -> str:
     return f"""<!doctype html>
 <html><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>qita diff {left_id} vs {right_id}</title>
+{_DESIGN_HEAD}
 <style>
-:root{{--bg:#090d16;--panel:#111a2c;--line:#223352;--txt:#e7edf9;--muted:#a7b8da;--accent:#50b6ff}}
-*{{box-sizing:border-box}} body{{margin:0;background:linear-gradient(160deg,#0a0f1d,#0a152b);color:var(--txt);font-family:ui-sans-serif,system-ui}}
+{_DESIGN_TOKENS}
+*{{box-sizing:border-box}} body{{margin:0;background:var(--bg);color:var(--txt);font-family:var(--font-body)}}
 .wrap{{max-width:1240px;margin:0 auto;padding:18px}} .top{{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:center}}
-.btn{{display:inline-block;border:1px solid var(--line);padding:7px 11px;border-radius:8px;text-decoration:none;color:var(--txt);background:#172643;font-size:12px}}
-.btn.ghost{{background:transparent}} .grid{{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:14px}}
-.card{{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px}} .meta{{color:var(--muted);font-size:12px}}
-table{{width:100%;border-collapse:collapse;margin-top:10px}} td,th{{border-bottom:1px solid #1c2b44;padding:8px;text-align:left;vertical-align:top;font-size:12px}}
-th{{color:#9fb2d8;font-weight:700}} .full{{margin-top:12px}} code{{background:#0b1220;padding:2px 5px;border-radius:6px}}
+.btn{{display:inline-block;border:1px solid var(--line);padding:7px 11px;border-radius:var(--radius-md);text-decoration:none;color:var(--txt);background:var(--surface-1);font-size:12px}}
+.btn:hover{{border-color:var(--accent)}} .btn.ghost{{background:transparent}} .grid{{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:14px}}
+.card{{background:var(--surface-1);border:1px solid var(--line);border-radius:var(--radius-lg);padding:12px}} .meta{{color:var(--muted);font-size:12px}}
+table{{width:100%;border-collapse:collapse;margin-top:10px}} td,th{{border-bottom:1px solid var(--line);padding:8px;text-align:left;vertical-align:top;font-size:12px}}
+th{{color:var(--muted);font-weight:700}} .full{{margin-top:12px}} code{{background:var(--surface-2);padding:2px 5px;border-radius:var(--radius-sm)}}
 @media (max-width:980px){{.grid{{grid-template-columns:1fr}}}}
 </style></head><body>
 <div class="wrap">
@@ -938,6 +1323,73 @@ th{{color:#9fb2d8;font-weight:700}} .full{{margin-top:12px}} code{{background:#0
 </body></html>"""
 
 
+def _render_branch_comparison_html(payload: Dict[str, Any], step_id: str) -> str:
+    """Render a page comparing branch candidates at a given step."""
+    import html as _html
+
+    safe_run = _html.escape(str(payload.get("run_id", "")))
+    safe_step = _html.escape(str(step_id))
+    steps = payload.get("steps", [])
+    step_data = None
+    for s in steps:
+        if str(getattr(s, "step_id", s.get("step_id", ""))) == str(step_id):
+            step_data = s
+            break
+
+    step_info = "Step not found"
+    if step_data is not None:
+        sd = step_data if isinstance(step_data, dict) else {}
+        step_info = _html.escape(json.dumps(sd, ensure_ascii=False, indent=2)[:2000])
+
+    candidates = []
+    if isinstance(step_data, dict):
+        candidates = step_data.get("candidates", [])
+
+    cand_rows = ""
+    for i, c in enumerate(candidates):
+        c_escaped = _html.escape(json.dumps(c, ensure_ascii=False, indent=2)[:1000])
+        cand_rows += f'<div class="card"><div style="font-weight:700">Candidate {i}</div><pre style="font-size:11px;white-space:pre-wrap;max-height:300px;overflow:auto">{c_escaped}</pre></div>'
+
+    if not cand_rows:
+        cand_rows = '<div class="muted">No branch candidates recorded for this step.</div>'
+
+    # Check for grounding failure
+    grounding_banner = ""
+    if isinstance(step_data, dict):
+        critic_outputs = step_data.get("critic_outputs", [])
+        for co in critic_outputs:
+            if isinstance(co, dict) and co.get("action") == "retry":
+                reason = str(co.get("reason", ""))
+                if "grounding" in reason.lower() or "element not found" in reason.lower() or "coordinates" in reason.lower():
+                    grounding_banner = f'<div style="padding:10px;margin:8px 0;border-radius:var(--radius-md);background:#e5484d11;border:2px solid var(--err);color:var(--err);font-weight:600">Grounding failure: {_html.escape(reason)}</div>'
+                    break
+
+    return f"""<!doctype html>
+<html><head><meta charset="utf-8"/><title>branch compare · {safe_run} · step {safe_step}</title>
+<style>{_DESIGN_TOKENS}</style>
+<style>
+*{{box-sizing:border-box}} body{{margin:0;font-family:var(--font-body);background:var(--bg);color:var(--txt)}}
+.wrap{{max-width:960px;margin:0 auto;padding:24px 18px}}
+.card{{background:var(--surface-1);border:1px solid var(--line);border-radius:var(--radius-lg);padding:14px;margin:8px 0}}
+.id{{font-weight:700;font-size:18px}} .muted{{color:var(--muted);font-size:12px}}
+.grid{{display:grid;grid-template-columns:1fr 1fr;gap:14px}}
+.btn{{display:inline-flex;align-items:center;border:1px solid var(--line);color:var(--txt);background:var(--surface-1);padding:6px 10px;border-radius:var(--radius-md);font-size:12px;text-decoration:none;cursor:pointer}}
+.btn:hover{{border-color:var(--accent)}}
+</style></head>
+<body>
+<div class="wrap">
+  <div class="id">Branch compare · {safe_run} · step {safe_step}</div>
+  <a class="btn" href="/run/{safe_run}" style="margin:8px 0">back to run</a>
+  {grounding_banner}
+  <div class="grid">{cand_rows}</div>
+  <div class="card" style="margin-top:12px">
+    <div style="font-weight:700;margin-bottom:8px">Step data</div>
+    <pre style="font-size:11px;white-space:pre-wrap;max-height:300px;overflow:auto">{step_info}</pre>
+  </div>
+</div>
+</body></html>"""
+
+
 def _render_run_html(payload: Dict[str, Any], embedded: bool) -> str:
     run_id = html.escape(str(payload.get("run_id", "")))
     run_path = html.escape(str(payload.get("run", "")))
@@ -951,92 +1403,104 @@ def _render_run_html(payload: Dict[str, Any], embedded: bool) -> str:
             f'<a class="btn" href="/export/raw/{run_id}">export raw</a>'
             f'<a class="btn" href="/export/html/{run_id}">export html</a>'
             f'<a class="btn" href="/replay/{run_id}">replay</a>'
+            f'<button class="btn" id="streamBtn" onclick="startStream()">live</button>'
             '<a class="btn ghost" href="/">board</a>'
         )
     return f"""<!doctype html>
 <html><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>qita run {run_id}</title>
+{_DESIGN_HEAD}
 <style>
-:root{{--bg:#090d16;--panel:#111a2c;--line:#223352;--txt:#e7edf9;--muted:#a7b8da;--accent:#50b6ff}}
-*{{box-sizing:border-box}} body{{margin:0;background:linear-gradient(160deg,#0a0f1d,#0a152b);color:var(--txt);font-family:ui-sans-serif,system-ui}}
+{_DESIGN_TOKENS}
+*{{box-sizing:border-box}} body{{margin:0;background:var(--bg);color:var(--txt);font-family:var(--font-body)}}
 .wrap{{max-width:1460px;margin:0 auto;padding:18px}}
-.top{{position:sticky;top:0;background:rgba(9,13,22,.9);backdrop-filter:blur(8px);padding:12px 0 14px;z-index:10;border-bottom:1px solid var(--line)}}
-.title{{font-size:22px;font-weight:800}} .muted{{color:var(--muted);font-size:12px}}
+.top{{position:sticky;top:0;background:rgba(1,1,2,.9);backdrop-filter:blur(8px);padding:12px 0 14px;z-index:10;border-bottom:1px solid var(--line)}}
+.title{{font-size:22px;font-weight:700;letter-spacing:-.4px}} .muted{{color:var(--muted);font-size:12px}}
 .toolbar{{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}}
-.btn{{display:inline-block;border:1px solid var(--line);padding:7px 11px;border-radius:8px;text-decoration:none;color:var(--txt);background:#172643;font-size:12px}}
+.btn{{display:inline-block;border:1px solid var(--line);padding:7px 11px;border-radius:var(--radius-md);text-decoration:none;color:var(--txt);background:var(--surface-1);font-size:12px}}
 .btn:hover{{border-color:var(--accent)}} .btn.ghost{{background:transparent}}
 .layout{{display:grid;grid-template-columns:260px 1fr;gap:12px;margin-top:12px}}
-.side{{position:sticky;top:84px;height:calc(100vh - 120px);overflow:auto;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px}}
+.side{{position:sticky;top:84px;height:calc(100vh - 120px);overflow:auto;background:var(--surface-1);border:1px solid var(--line);border-radius:var(--radius-lg);padding:10px}}
 .main{{min-width:0}}
-.manifest{{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px;margin-top:0}}
+.manifest{{background:var(--surface-1);border:1px solid var(--line);border-radius:var(--radius-lg);padding:12px;margin-top:0}}
 .tabs{{display:flex;gap:8px;margin-bottom:10px}}
-.tab{{border:1px solid var(--line);background:#0f1930;color:var(--txt);padding:8px 12px;border-radius:999px;cursor:pointer;font-size:13px}}
-.tab.active{{background:#1a335b;border-color:var(--accent)}}
+.tab{{border:1px solid var(--line);background:var(--surface-1);color:var(--txt);padding:8px 12px;border-radius:var(--radius-pill);cursor:pointer;font-size:13px}}
+.tab.active{{background:var(--surface-2);border-color:var(--accent)}}
 .panel{{display:none}}
 .panel.active{{display:block}}
 .controls{{display:grid;grid-template-columns:1.2fr .8fr .8fr .8fr .8fr auto auto auto;gap:8px;margin:12px 0}}
-.controls input,.controls select{{border:1px solid var(--line);background:#0d1527;color:var(--txt);border-radius:8px;padding:8px 10px;font-size:12px}}
+.controls input,.controls select{{border:1px solid var(--line);background:var(--surface-1);color:var(--txt);border-radius:var(--radius-md);padding:8px 10px;font-size:12px}}
 .overview{{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:8px;margin:10px 0 12px}}
-.ov{{background:linear-gradient(180deg,rgba(255,255,255,.04),rgba(255,255,255,0));border:1px solid #2a3d61;border-radius:10px;padding:8px 10px}}
-.ov .k{{font-size:11px;color:#91a8d6;text-transform:uppercase;letter-spacing:.3px}}
-.ov .v{{font-size:14px;color:#e7f0ff;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}
-.timeline{{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px;margin:0 0 12px}}
+.ov{{background:var(--surface-1);border:1px solid var(--line);border-radius:var(--radius-md);padding:8px 10px}}
+.ov .k{{font-size:11px;color:var(--subtle);text-transform:uppercase;letter-spacing:.3px}}
+.ov .v{{font-size:14px;color:var(--txt);font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}
+.timeline{{background:var(--surface-1);border:1px solid var(--line);border-radius:var(--radius-lg);padding:12px;margin:0 0 12px}}
 .vtimeline{{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:10px}}
-.vcard{{background:#0b1220;border:1px solid #1c2b44;border-radius:10px;padding:8px}}
-.vthumb{{position:relative;border:1px solid #243657;border-radius:8px;overflow:hidden;background:#081021;min-height:110px;display:flex;align-items:center;justify-content:center}}
+.vcard{{background:var(--surface-1);border:1px solid var(--line);border-radius:var(--radius-md);padding:8px}}
+.vthumb{{position:relative;border:1px solid var(--line-strong);border-radius:var(--radius-md);overflow:hidden;background:var(--bg);min-height:110px;display:flex;align-items:center;justify-content:center}}
 .vthumb img{{max-width:100%;display:block}}
 .voverlay{{position:absolute;inset:0;pointer-events:none}}
-.vdot{{position:absolute;width:12px;height:12px;border-radius:999px;background:rgba(255,107,107,.85);border:2px solid #fff;transform:translate(-50%,-50%)}}
-.vbox{{position:absolute;border:2px solid rgba(80,182,255,.9);background:rgba(80,182,255,.08);border-radius:4px}}
+.vdot{{position:absolute;width:12px;height:12px;border-radius:var(--radius-pill);background:rgba(229,72,77,.85);border:2px solid var(--txt);transform:translate(-50%,-50%)}}
+.vbox{{position:absolute;border:2px solid rgba(94,106,210,.9);background:rgba(94,106,210,.08);border-radius:var(--radius-xs)}}
 .trow{{display:grid;grid-template-columns:82px 1fr 64px;gap:8px;align-items:center;margin:6px 0}}
-.tlabel{{font-size:12px;color:#9fb2d8}}
-.track{{height:16px;background:#0b1220;border:1px solid #1c2b44;border-radius:999px;overflow:hidden;position:relative}}
+.tlabel{{font-size:12px;color:var(--muted)}}
+.track{{height:16px;background:var(--surface-1);border:1px solid var(--line);border-radius:var(--radius-pill);overflow:hidden;position:relative}}
+.gantt-svg{{width:100%;height:auto;display:block;background:var(--surface-1);border:1px solid var(--line);border-radius:var(--radius-lg)}}
+.gantt-lane{{fill:var(--surface-2);stroke:var(--line);stroke-width:1}}
+.gantt-bar{{fill-opacity:0.7;rx:4;ry:4}}
+.gantt-arrow{{fill:none;stroke:#bfa04e;stroke-width:2;marker-end:url(#hArrow)}}
+.gantt-label{{fill:var(--muted);font-size:11px;font-family:var(--font-body)}}
+.gantt-step-label{{fill:var(--subtle);font-size:10px;font-family:var(--font-mono)}}
 .seg{{height:100%;display:inline-block}}
 .heat0{{filter:brightness(0.85)}} .heat1{{filter:brightness(1)}} .heat2{{filter:brightness(1.15)}} .heat3{{filter:brightness(1.3)}}
-.tdur{{font-size:11px;color:#9fb2d8;text-align:right}}
+.tdur{{font-size:11px;color:var(--muted);text-align:right}}
 .context-chart{{display:grid;gap:10px}}
-.context-head{{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;font-size:12px;color:#a7b8da}}
-.context-svg{{width:100%;height:auto;display:block;background:#0b1220;border:1px solid #1c2b44;border-radius:12px}}
-.context-axis{{stroke:#284164;stroke-width:1}}
-.context-grid{{stroke:#1b2c47;stroke-width:1;stroke-dasharray:4 6}}
-.context-line{{fill:none;stroke:#6fd3ff;stroke-width:3;stroke-linecap:round;stroke-linejoin:round}}
-.context-fill{{fill:rgba(79,181,255,.12)}}
-.context-point{{fill:#0f1930;stroke:#8fe0ff;stroke-width:2}}
-.context-label{{fill:#91a8d6;font-size:11px}}
-.compact-dot{{stroke:#0a1220;stroke-width:1.5}}
+.context-head{{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;font-size:12px;color:var(--muted)}}
+.context-svg{{width:100%;height:auto;display:block;background:var(--surface-1);border:1px solid var(--line);border-radius:var(--radius-lg)}}
+.context-axis{{stroke:var(--line-strong);stroke-width:1}}
+.context-grid{{stroke:var(--line);stroke-width:1;stroke-dasharray:4 6}}
+.context-line{{fill:none;stroke:var(--accent);stroke-width:3;stroke-linecap:round;stroke-linejoin:round}}
+.context-fill{{fill:rgba(94,106,210,.12)}}
+.context-point{{fill:var(--surface-1);stroke:var(--accent);stroke-width:2}}
+.context-label{{fill:var(--subtle);font-size:11px}}
+.compact-dot{{stroke:var(--surface-1);stroke-width:1.5}}
 .compact-list{{display:grid;gap:6px}}
-.compact-item{{display:grid;grid-template-columns:92px 1fr;gap:8px;background:#0b1220;border:1px solid #1c2b44;border-radius:10px;padding:8px}}
-.compact-step{{font-size:11px;color:#9fb2d8;text-transform:uppercase;letter-spacing:.3px}}
-.compact-desc{{font-size:12px;color:#dce8ff;word-break:break-word}}
+.compact-item{{display:grid;grid-template-columns:92px 1fr;gap:8px;background:var(--surface-1);border:1px solid var(--line);border-radius:var(--radius-md);padding:8px}}
+.compact-step{{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.3px}}
+.compact-desc{{font-size:12px;color:var(--txt);word-break:break-word}}
 .flow{{display:grid;grid-template-columns:1fr;gap:12px}}
 @media (max-width:1180px){{.layout{{grid-template-columns:1fr}} .side{{position:relative;top:0;height:auto}} .controls{{grid-template-columns:1fr 1fr}}}}
-.card{{break-inside:avoid;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px;margin:0 0 12px;box-shadow:0 8px 20px rgba(0,0,0,.2)}}
-.kind-thinking{{border-left:4px solid #9b8cff}} .kind-action{{border-left:4px solid #3dd68c}}
-.kind-observation{{border-left:4px solid #4db5ff}} .kind-critic{{border-left:4px solid #f7b955}}
-.kind-other{{border-left:4px solid #7287ad}}
+.card{{break-inside:avoid;background:var(--surface-1);border:1px solid var(--line);border-radius:var(--radius-lg);padding:12px;margin:0 0 12px}}
+.kind-thinking{{border-left:4px solid var(--kind-thinking)}} .kind-action{{border-left:4px solid var(--kind-action)}}
+.kind-observation{{border-left:4px solid var(--kind-observation)}} .kind-critic{{border-left:4px solid var(--kind-critic)}}
+.kind-handoff{{border-left:4px solid var(--kind-handoff)}} .kind-delegation{{border-left:4px solid var(--kind-delegation)}}
+.kind-fanout{{border-left:4px solid var(--kind-fanout)}} .kind-other{{border-left:4px solid var(--kind-other)}}
 .card-head{{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}}
-.step{{font-weight:800}}
-h4{{margin:8px 0 6px;font-size:12px;color:#95add8;text-transform:uppercase;letter-spacing:.3px;display:flex;justify-content:space-between;align-items:center}}
-pre{{margin:0;background:#0b1220;border:1px solid #1c2b44;padding:10px;border-radius:8px;max-height:300px;overflow:auto;white-space:pre-wrap;word-break:break-word;color:#dde7fb;font-size:12px}}
-.sbtn{{border:1px solid var(--line);background:#15233f;color:var(--txt);padding:2px 6px;border-radius:6px;font-size:11px;cursor:pointer}}
-.kv{{display:grid;grid-template-columns:120px 1fr;gap:6px 10px;background:#0b1220;border:1px solid #1c2b44;padding:8px;border-radius:8px}}
-.k{{font-size:11px;color:#8ea4cf;text-transform:uppercase;letter-spacing:.3px}}
-.v{{font-size:12px;color:#dce8ff;word-break:break-word}}
+.step{{font-weight:700}}
+h4{{margin:8px 0 6px;font-size:12px;color:var(--subtle);text-transform:uppercase;letter-spacing:.3px;display:flex;justify-content:space-between;align-items:center}}
+pre{{margin:0;background:var(--surface-2);border:1px solid var(--line);padding:10px;border-radius:var(--radius-md);max-height:300px;overflow:auto;white-space:pre-wrap;word-break:break-word;color:var(--txt);font-size:12px}}
+.sbtn{{border:1px solid var(--line);background:var(--surface-2);color:var(--txt);padding:2px 6px;border-radius:var(--radius-sm);font-size:11px;cursor:pointer}}
+.kv{{display:grid;grid-template-columns:120px 1fr;gap:6px 10px;background:var(--surface-2);border:1px solid var(--line);padding:8px;border-radius:var(--radius-md)}}
+.k{{font-size:11px;color:var(--subtle);text-transform:uppercase;letter-spacing:.3px}}
+.v{{font-size:12px;color:var(--txt);word-break:break-word}}
 .chips{{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}}
-.chip{{font-size:11px;padding:2px 8px;border-radius:999px;border:1px solid #294064;background:#0e1a30;color:#b8cdf4}}
+.chip{{font-size:11px;padding:2px 8px;border-radius:var(--radius-pill);border:1px solid var(--line-strong);background:var(--surface-2);color:var(--muted)}}
 .list{{display:grid;gap:8px}}
-.item{{background:#0b1220;border:1px solid #1c2b44;border-radius:8px;padding:8px}}
+.item{{background:var(--surface-2);border:1px solid var(--line);border-radius:var(--radius-md);padding:8px}}
 .raw{{margin-top:6px}}
 .tree-wrap{{margin-top:8px}}
-.tree{{border:1px solid #1c2b44;border-radius:8px;padding:8px;background:#0b1220}}
+.tree{{border:1px solid var(--line);border-radius:var(--radius-md);padding:8px;background:var(--surface-2)}}
 .tree details{{margin:4px 0}}
-.tree summary{{cursor:pointer;color:#b7cdf4;font-size:12px}}
-.tree-children{{margin-left:10px;border-left:1px dashed #2a3d61;padding-left:10px}}
+.tree summary{{cursor:pointer;color:var(--muted);font-size:12px}}
+.tree-children{{margin-left:10px;border-left:1px dashed var(--line-strong);padding-left:10px}}
 .tree-leaf{{display:grid;grid-template-columns:130px 1fr;gap:8px;margin:4px 0}}
-.tree-key{{font-size:12px;color:#90a8d6}}
-.tree-val{{font-size:12px;color:#e4edff;word-break:break-word}}
-.toc-item{{display:block;width:100%;text-align:left;border:1px solid var(--line);background:#0f1930;color:var(--txt);padding:7px 8px;border-radius:8px;font-size:12px;cursor:pointer;margin-bottom:6px}}
-.toc-item:hover{{border-color:var(--accent)}} .toc-item.active{{border-color:var(--accent);background:#173056}}
+.tree-key{{font-size:12px;color:var(--subtle)}}
+.tree-val{{font-size:12px;color:var(--txt);word-break:break-word}}
+.toc-item{{display:block;width:100%;text-align:left;border:1px solid var(--line);background:var(--surface-1);color:var(--txt);padding:7px 8px;border-radius:var(--radius-md);font-size:12px;cursor:pointer;margin-bottom:6px}}
+.toc-item:hover{{border-color:var(--accent)}} .toc-item.active{{border-color:var(--accent);background:var(--surface-2)}}
+@keyframes fadeIn{{from{{opacity:0;transform:translateY(-4px)}}to{{opacity:1;transform:translateY(0)}}}}
+@keyframes pulse{{0%,100%{{opacity:1}}50%{{opacity:0.4}}}}
+.live-dot{{display:inline-block;width:8px;height:8px;border-radius:9999px;background:var(--ok);animation:pulse 1.5s ease infinite;margin-right:6px}}
 </style></head><body>
 <div class="top"><div class="wrap">
   <div class="title">QitOS Trace · {run_id}</div>
@@ -1046,7 +1510,7 @@ pre{{margin:0;background:#0b1220;border:1px solid #1c2b44;padding:10px;border-ra
 <div class="wrap">
   <div class="layout">
     <aside class="side">
-      <div style="font-size:12px;color:#9fb2d8;margin-bottom:8px">Step Navigator</div>
+      <div style="font-size:12px;color:var(--muted);margin-bottom:8px">Step Navigator</div>
       <div id="toc"></div>
     </aside>
     <section class="main">
@@ -1056,17 +1520,26 @@ pre{{margin:0;background:#0b1220;border:1px solid #1c2b44;padding:10px;border-ra
       </div>
       <section class="panel active" id="panelTraj">
         <section class="overview" id="overview"></section>
+        <section class="timeline" id="costPanelSection">
+          <h4>cost summary</h4>
+          <div id="costPanel"></div>
+        </section>
         <div class="controls">
           <input id="q" placeholder="Filter by text in observation/decision/action/critic/events"/>
           <select id="eventFilter"><option value="">All events</option></select>
+          <select id="agentFilter"><option value="">All agents</option></select>
           <select id="sort"><option value="asc">step asc</option><option value="desc">step desc</option></select>
-          <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#a7b8da"><input type="checkbox" id="showObs" checked/>obs</label>
-          <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#a7b8da"><input type="checkbox" id="showCritic" checked/>critic</label>
+          <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted)"><input type="checkbox" id="showObs" checked/>obs</label>
+          <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted)"><input type="checkbox" id="showCritic" checked/>critic</label>
           <button class="btn" id="foldAll" type="button">Fold all</button>
           <button class="btn" id="fontDown" type="button">A-</button>
           <button class="btn" id="fontReset" type="button">A</button>
           <button class="btn" id="fontUp" type="button">A+</button>
         </div>
+        <section class="timeline" id="screenshotStripSection" style="display:none">
+          <h4>screenshot strip</h4>
+          <div id="screenshotStrip" style="display:flex;gap:6px;overflow-x:auto;padding:8px 0"></div>
+        </section>
         <section class="timeline">
           <h4>visual timeline</h4>
           <div id="visualTimeline"></div>
@@ -1075,6 +1548,10 @@ pre{{margin:0;background:#0b1220;border:1px solid #1c2b44;padding:10px;border-ra
           <h4>phase timeline (gantt-like)</h4>
           <div id="timeline"></div>
         </section>
+        <section class="timeline" id="handoffGanttSection">
+          <h4>handoff gantt</h4>
+          <div id="handoffGantt"></div>
+        </section>
         <section class="timeline">
           <h4>context timeline</h4>
           <div id="contextTimeline"></div>
@@ -1082,6 +1559,10 @@ pre{{margin:0;background:#0b1220;border:1px solid #1c2b44;padding:10px;border-ra
         <section class="timeline">
           <h4>parser timeline</h4>
           <div id="parserTimeline"></div>
+        </section>
+        <section class="timeline">
+          <h4>critic timeline</h4>
+          <div id="criticTimeline"></div>
         </section>
         <section class="flow" id="flow"></section>
       </section>
@@ -1103,6 +1584,7 @@ const timelineRoot = document.getElementById('timeline');
 const visualTimelineRoot = document.getElementById('visualTimeline');
 const contextTimelineRoot = document.getElementById('contextTimeline');
 const parserTimelineRoot = document.getElementById('parserTimeline');
+const criticTimelineRoot = document.getElementById('criticTimeline');
 const overview = document.getElementById('overview');
 const fontDownBtn = document.getElementById('fontDown');
 const fontResetBtn = document.getElementById('fontReset');
@@ -1228,10 +1710,10 @@ function flattenResults(input){{
 }}
 function renderSearchTable(rows){{
   if(!rows.length) return '';
-  let h = '<table style="width:100%;border-collapse:collapse;font-size:12px;background:#0b1220;border:1px solid #1c2b44;border-radius:8px;overflow:hidden">';
-  h += '<thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #1c2b44;color:#9fb2d8">Title</th><th style="text-align:left;padding:8px;border-bottom:1px solid #1c2b44;color:#9fb2d8">URL</th></tr></thead><tbody>';
+  let h = '<table style="width:100%;border-collapse:collapse;font-size:12px;background:var(--surface-2);border:1px solid var(--line);border-radius:var(--radius-md);overflow:hidden">';
+  h += '<thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid var(--line);color:var(--muted)">Title</th><th style="text-align:left;padding:8px;border-bottom:1px solid var(--line);color:var(--muted)">URL</th></tr></thead><tbody>';
   for(const r of rows.slice(0, 8)){{
-    h += '<tr><td style="padding:8px;border-bottom:1px solid #1c2b44">'+esc(truncateText(r.title, 90))+'</td><td style="padding:8px;border-bottom:1px solid #1c2b44;color:#86c8ff">'+esc(shortUrl(r.url))+'</td></tr>';
+    h += '<tr><td style="padding:8px;border-bottom:1px solid var(--line)">'+esc(truncateText(r.title, 90))+'</td><td style="padding:8px;border-bottom:1px solid var(--line);color:var(--accent)">'+esc(shortUrl(r.url))+'</td></tr>';
   }}
   h += '</tbody></table>';
   return h;
@@ -1315,7 +1797,7 @@ function renderObservationBlock(summary, label){{
   if(!summary || typeof summary !== 'object') return '';
   const title = summary.title ? ('<div style="font-weight:600;margin-bottom:6px">' + esc(String(label || summary.title)) + ' · ' + esc(String(summary.title)) + '</div>') : '';
   if(summary.table) return '<div style="margin-bottom:12px">' + title + summary.table + '</div>';
-  if(summary.kind === 'error') return '<div style="margin-bottom:12px;color:#ff8a8a">' + title + '<div>' + esc(String(summary.title || summary.body || 'Error')) + '</div></div>';
+  if(summary.kind === 'error') return '<div style="margin-bottom:12px;color:var(--err)">' + title + '<div>' + esc(String(summary.title || summary.body || 'Error')) + '</div></div>';
   return '<div style="margin-bottom:12px">' + title + '<pre>' + esc(String(summary.body || '')) + '</pre></div>';
 }}
 function renderState(obs){{
@@ -1340,6 +1822,39 @@ function renderState(obs){{
 function renderDirectObservation(actionResults){{
   const ars = Array.isArray(actionResults) ? actionResults : [];
   if(!ars.length) return '<div class="muted">No direct observation from action.</div>';
+  // Check for delegate/fanout structured results
+  for(const item of ars){{
+    if(!item || typeof item !== 'object') continue;
+    // Delegate result
+    if(item.handoff === true || (item.status && item.agent_name)){{
+      const rows = [];
+      if(item.agent_name) rows.push(kvRow('agent', item.agent_name));
+      if(item.status) rows.push(kvRow('status', item.status));
+      if(item.final_result) rows.push(kvRow('result', truncateText(String(item.final_result), 300)));
+      if(item.stop_reason) rows.push(kvRow('stop_reason', item.stop_reason));
+      if(item.steps) rows.push(kvRow('steps', item.steps));
+      return '<div style="margin-bottom:12px"><div style="font-weight:600;margin-bottom:6px;color:var(--kind-delegation)">↗ Delegate Result</div>' + (rows.length ? kvBlock(rows) : '<div class="muted">No details.</div>') + '</div>';
+    }}
+    // Fanout result
+    if(item.succeeded !== undefined && (item.failed !== undefined || item.partial !== undefined)){{
+      const ok = Number(item.succeeded) || 0;
+      const fail = Number(item.failed) || 0;
+      const partial = Number(item.partial) || 0;
+      const rows = [
+        kvRow('succeeded', '<span style="color:var(--ok)">' + ok + '</span>'),
+        kvRow('failed', '<span style="color:var(--err)">' + fail + '</span>'),
+      ];
+      if(partial) rows.push(kvRow('partial', '<span style="color:var(--warn)">' + partial + '</span>'));
+      if(Array.isArray(item.results)){{
+        const taskRows = item.results.slice(0, 5).map(function(r, i){{
+          if(!r || typeof r !== 'object') return kvRow('task ' + i, truncateText(JSON.stringify(r), 100));
+          return kvRow('task ' + i, (r.status || 'done') + (r.agent_name ? ' (' + r.agent_name + ')' : '') + (r.final_result ? ': ' + truncateText(String(r.final_result), 80) : ''));
+        }});
+        rows.push(...taskRows);
+      }}
+      return '<div style="margin-bottom:12px"><div style="font-weight:600;margin-bottom:6px;color:var(--kind-fanout)">⊛ FanOut Result</div>' + kvBlock(rows) + '</div>';
+    }}
+  }}
   const picked = pickObservation(actionResults);
   if(!picked) return '<div class="muted">No direct observation from action.</div>';
   const blocks = [];
@@ -1382,6 +1897,34 @@ function renderVisualOverlay(item){{
   }}
   return parts.length ? ('<div class="voverlay">' + parts.join('') + '</div>') : '';
 }}
+function buildScreenshotStrip(){{
+  const strip = document.getElementById('screenshotStrip');
+  const section = document.getElementById('screenshotStripSection');
+  if(!strip || !section) return;
+  const rows = Array.isArray(payload.visual_timeline) ? payload.visual_timeline : [];
+  if(!rows.length || embedded){{ section.style.display = 'none'; return; }}
+  section.style.display = '';
+  strip.innerHTML = '';
+  for(const item of rows){{
+    const shot = (item && typeof item === 'object') ? item.screenshot : null;
+    const path = shot && typeof shot === 'object' ? String(shot.path || '') : '';
+    const hasRetry = (item.critic_retry_count || 0) > 0;
+    const groundOk = item.grounding_present;
+    const div = document.createElement('div');
+    div.style.cssText = 'flex:0 0 80px;cursor:pointer;text-align:center;border:1px solid var(--line);border-radius:var(--radius-md);overflow:hidden;position:relative;';
+    if(path){{
+      div.innerHTML = '<img src="' + esc(assetHref(path)) + '" style="width:80px;height:45px;object-fit:cover;display:block" alt="step '+esc(String(item.step_id))+'"/><div style="font-size:9px;padding:2px 4px;background:var(--surface-2);color:var(--muted)">S'+esc(String(item.step_id))+'</div>' + (hasRetry ? '<div style="position:absolute;top:2px;right:2px;width:8px;height:8px;border-radius:50%;background:var(--err)"></div>' : '') + (groundOk === false ? '<div style="position:absolute;top:2px;left:2px;width:8px;height:8px;border-radius:50%;background:#e5c100"></div>' : '');
+    }} else {{
+      div.innerHTML = '<div style="width:80px;height:45px;background:var(--surface-2);display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:10px">S'+esc(String(item.step_id))+'</div><div style="font-size:9px;padding:2px 4px;background:var(--surface-2);color:var(--muted)">S'+esc(String(item.step_id))+'</div>';
+    }}
+    const sid = String(item.step_id);
+    div.addEventListener('click', function(){{
+      const card = document.getElementById('step-'+sid);
+      if(card) card.scrollIntoView({{behavior:'smooth',block:'center'}});
+    }});
+    strip.appendChild(div);
+  }}
+}}
 function buildVisualTimeline(items){{
   const rows = Array.isArray(payload.visual_timeline) ? payload.visual_timeline : [];
   if(!rows.length){{
@@ -1398,7 +1941,7 @@ function buildVisualTimeline(items){{
     }}
     cards.push(
       '<div class="vcard">' +
-      '<div style="font-size:11px;color:#9fb2d8;margin-bottom:6px">STEP ' + esc(String(item.step_id)) + '</div>' +
+      '<div style="font-size:11px;color:var(--muted);margin-bottom:6px">STEP ' + esc(String(item.step_id)) + '</div>' +
       preview +
       kvBlock([
         kvRow('action', item.action_label || '-'),
@@ -1410,6 +1953,42 @@ function buildVisualTimeline(items){{
     );
   }}
   visualTimelineRoot.innerHTML = '<div class="vtimeline">' + cards.join('') + '</div>';
+}}
+function renderActionOverlay(step){{
+  const st = (step && typeof step === 'object') ? step : {{}};
+  const actions = Array.isArray(st.actions) ? st.actions : [];
+  const retryCount = Array.isArray(st.critic_outputs) ? st.critic_outputs.filter(function(x){{ return x && typeof x === 'object' && x.action === 'retry'; }}).length : 0;
+  let parts = [];
+  // Grounding failure banner
+  const criticOutputs = Array.isArray(st.critic_outputs) ? st.critic_outputs : [];
+  for(const co of criticOutputs){{
+    if(co && typeof co === 'object' && co.action === 'retry'){{
+      const reason = String(co.reason || '').toLowerCase();
+      if(reason.includes('grounding') || reason.includes('element not found') || reason.includes('coordinates') || reason.includes('out of bounds')){{
+        parts.push('<div style="padding:6px 10px;margin:4px 0;border-radius:var(--radius-md);background:#e5484d11;border:2px solid var(--err);color:var(--err);font-size:11px;font-weight:600">Grounding failure: '+esc(String(co.reason || ''))+'</div>');
+        break;
+      }}
+    }}
+  }}
+  if(!actions.length && !parts.length) return '';
+  for(const a of actions){{
+    if(!a || typeof a !== 'object') continue;
+    const at = String(a.action_type || a.name || '');
+    const args = a.args || a;
+    if((at === 'click' || at === 'move_to' || at === 'right_click' || at === 'double_click') && args.x !== undefined && args.y !== undefined){{
+      const color = retryCount > 0 ? 'var(--err)' : 'var(--ok)';
+      parts.push('<div style="display:inline-flex;align-items:center;gap:4px;padding:2px 8px;margin:2px;border-radius:var(--radius-pill);font-size:10px;background:var(--surface-2);border:1px solid '+color+';color:'+color+'"><span style="width:6px;height:6px;border-radius:50%;background:'+color+'"></span>'+esc(at)+' ('+esc(String(args.x))+','+esc(String(args.y))+')</div>');
+    }} else if(at === 'type_text'){{
+      const text = String(args.text || '').slice(0,40);
+      parts.push('<div style="display:inline-flex;align-items:center;gap:4px;padding:2px 8px;margin:2px;border-radius:var(--radius-pill);font-size:10px;background:var(--surface-2);border:1px solid var(--line);color:var(--txt)">type "'+esc(text)+'"</div>');
+    }} else if(at === 'navigate'){{
+      const url = String(args.url || '').slice(0,60);
+      parts.push('<div style="display:inline-flex;align-items:center;gap:4px;padding:2px 8px;margin:2px;border-radius:var(--radius-pill);font-size:10px;background:var(--surface-2);border:1px solid var(--accent);color:var(--accent)">&#x2192; '+esc(url)+'</div>');
+    }} else if(at === 'scroll'){{
+      parts.push('<div style="display:inline-flex;align-items:center;gap:4px;padding:2px 8px;margin:2px;border-radius:var(--radius-pill);font-size:10px;background:var(--surface-2);border:1px solid var(--line);color:var(--muted)">&#x2195; scroll</div>');
+    }}
+  }}
+  return parts.length ? '<div style="margin:4px 0">'+parts.join('')+'</div>' : '';
 }}
 function renderVisualAssets(step){{
   const st = (step && typeof step === 'object') ? step : {{}};
@@ -1429,6 +2008,48 @@ function renderVisualAssets(step){{
   const label = firstActionLabel(st.actions || []);
   if(label) headerRows.push(kvRow('action taken', label));
   let htmlBlocks = headerRows.length ? kvBlock(headerRows) : '';
+  // Action overlay markers
+  htmlBlocks += renderActionOverlay(st);
+  // Observation pack viewer toggle
+  const obsPack = multimodal.multimodal || {{}};
+  const hasObsData = obsPack.text || obsPack.dom || obsPack.accessibility_tree || (Array.isArray(obsPack.ocr) && obsPack.ocr.length) || (Array.isArray(obsPack.ui_candidates) && obsPack.ui_candidates.length) || obsPack.grounding_metadata;
+  if(hasObsData){{
+    const sid = String(st.step_id || 0);
+    htmlBlocks += '<button class="btn" style="margin:6px 0;font-size:11px" onclick="var el=document.getElementById(\\'obspack-'+sid+'\\');if(el){{el.style.display=el.style.display===\\'none\\'?\\'block\\':\\'none\\';}}">observation pack</button>';
+    htmlBlocks += '<div id="obspack-'+sid+'" style="display:none;margin-top:4px;border:1px dashed var(--line-strong);border-radius:var(--radius-md);padding:8px;background:var(--surface-1)">';
+    if(obsPack.text) htmlBlocks += kvBlock([kvRow('text', truncateText(String(obsPack.text), 200))]);
+    if(obsPack.dom){{
+      const domStr = typeof obsPack.dom === 'string' ? truncateText(obsPack.dom, 500) : JSON.stringify(obsPack.dom).slice(0,500);
+      htmlBlocks += '<details style="margin:4px 0"><summary style="cursor:pointer;font-size:12px;color:var(--muted)">DOM</summary><pre style="font-size:10px;max-height:300px;overflow:auto;white-space:pre-wrap">'+esc(domStr)+'</pre></details>';
+    }}
+    if(obsPack.accessibility_tree){{
+      const a11yStr = typeof obsPack.accessibility_tree === 'string' ? truncateText(obsPack.accessibility_tree, 500) : JSON.stringify(obsPack.accessibility_tree).slice(0,500);
+      htmlBlocks += '<details style="margin:4px 0"><summary style="cursor:pointer;font-size:12px;color:var(--muted)">a11y tree</summary><pre style="font-size:10px;max-height:300px;overflow:auto;white-space:pre-wrap">'+esc(a11yStr)+'</pre></details>';
+    }}
+    if(Array.isArray(obsPack.ocr) && obsPack.ocr.length){{
+      let ocrRows = '';
+      for(const span of obsPack.ocr.slice(0,20)){{
+        if(!span || typeof span !== 'object') continue;
+        ocrRows += '<tr><td style="font-size:10px;padding:2px 6px">'+esc(String(span.text||''))+'</td><td style="font-size:10px;padding:2px 6px">'+esc(JSON.stringify(span.x!==undefined?{{x:span.x,y:span.y,w:span.w,h:span.h}}:span))+'</td></tr>';
+      }}
+      htmlBlocks += '<details style="margin:4px 0"><summary style="cursor:pointer;font-size:12px;color:var(--muted)">OCR ('+obsPack.ocr.length+')</summary><table style="font-size:10px;border-collapse:collapse">'+ocrRows+'</table></details>';
+    }}
+    if(Array.isArray(obsPack.ui_candidates) && obsPack.ui_candidates.length){{
+      let uiRows = '';
+      for(const c of obsPack.ui_candidates.slice(0,20)){{
+        if(!c || typeof c !== 'object') continue;
+        uiRows += '<tr><td style="font-size:10px;padding:2px 6px">'+esc(String(c.type||''))+'</td><td style="font-size:10px;padding:2px 6px">'+esc(String(c.text||''))+'</td></tr>';
+      }}
+      htmlBlocks += '<details style="margin:4px 0"><summary style="cursor:pointer;font-size:12px;color:var(--muted)">UI candidates ('+obsPack.ui_candidates.length+')</summary><table style="font-size:10px;border-collapse:collapse">'+uiRows+'</table></details>';
+    }}
+    if(obsPack.grounding_metadata){{
+      const gm = obsPack.grounding_metadata;
+      const boxes = Array.isArray(gm.boxes) ? gm.boxes : [];
+      const spans = Array.isArray(gm.ocr_spans) ? gm.ocr_spans : [];
+      htmlBlocks += kvBlock([kvRow('grounding boxes', boxes.length), kvRow('OCR spans', spans.length)]);
+    }}
+    htmlBlocks += '</div>';
+  }}
   if(!assets.length){{
     return htmlBlocks || '<div class="muted">No visual assets recorded.</div>';
   }}
@@ -1441,7 +2062,7 @@ function renderVisualAssets(step){{
     let preview = '';
     if(imageLike && !embedded && path){{
       const timelineItem = (Array.isArray(payload.visual_timeline) ? payload.visual_timeline.find(function(it){{ return String(it.step_id) === String(st.step_id); }}) : null) || {{}};
-      preview = '<div class="vthumb" style="margin-top:8px"><img src="' + esc(assetHref(path)) + '" alt="visual asset"/>' + renderVisualOverlay(timelineItem) + '</div>';
+      preview = '<div class="vthumb" style="margin-top:8px;position:relative"><img src="' + esc(assetHref(path)) + '" alt="visual asset"/>' + renderVisualOverlay(timelineItem) + '</div>';
     }} else if(path) {{
       preview = '<div style="margin-top:8px"><pre>' + esc(String(path)) + '</pre></div>';
     }}
@@ -1464,12 +2085,32 @@ function renderThought(decision, events, step){{
   const thought = extractThought(decision, events);
   const summary = renderModelResponseSummary(latestModelResponse(events), step);
   if(!thought) return (summary || '<div class="muted">No explicit thought.</div>');
-  return '<div style="white-space:pre-wrap;line-height:1.6;background:#0b1220;border:1px solid #1c2b44;border-radius:8px;padding:10px;color:#cfe6ff">'+esc(thought)+'</div>' + summary;
+  return '<div style="white-space:pre-wrap;line-height:1.6;background:var(--surface-2);border:1px solid var(--line);border-radius:var(--radius-md);padding:10px;color:var(--txt)">'+esc(thought)+'</div>' + summary;
 }}
 function renderAction(actions){{
+  if(!Array.isArray(actions) || !actions.length) return '<div class="muted">No action.</div>';
+  const first = actions[0] || {{}};
+  const tool = first.tool || first.name || first.action || first.type || 'action';
+  const args = (first.args && typeof first.args === 'object') ? first.args : (first.kwargs && typeof first.kwargs === 'object') ? first.kwargs : {{}};
+  // Special rendering for delegate/fanout
+  if(String(tool).toLowerCase() === 'delegate'){{
+    const agent = args.agent_name || args.agent || '?';
+    const task = args.task || '';
+    return '<div style="font-size:13px;color:var(--kind-delegation)">↗ <b>Delegate:</b> → <b>' + esc(agent) + '</b>' + (task ? '<div style="margin-top:4px;font-size:12px;color:var(--muted)">' + esc(truncateText(task, 300)) + '</div>' : '') + '</div>';
+  }}
+  if(String(tool).toLowerCase() === 'fanout'){{
+    const tasks = Array.isArray(args.tasks) ? args.tasks : [];
+    const count = tasks.length || args.num_tasks || args.task_count || 0;
+    const taskList = tasks.slice(0, 5).map(function(t){{ return '<div style="font-size:11px;color:var(--muted);padding:2px 0">· ' + esc(truncateText(String(t), 120)) + '</div>'; }}).join('');
+    return '<div style="font-size:13px;color:var(--kind-fanout)">⊛ <b>FanOut:</b> ' + esc(String(count)) + ' task(s)' + (taskList ? '<div style="margin-top:4px">' + taskList + '</div>' : '') + '</div>';
+  }}
+  // General action with full params
   const label = firstActionLabel(actions);
-  if(!label) return '<div class="muted">No action.</div>';
-  return '<div style="font-size:13px;color:#f4df8f">🛠️ <b>Action:</b> ' + esc(label) + '</div>';
+  const argKeys = Object.keys(args);
+  let paramHtml = '';
+  if(argKeys.length > 1){{
+    paramHtml = '<details style="margin-top:4px"><summary style="cursor:pointer;color:var(--muted);font-size:11px">Show all params (' + argKeys.length + ')</summary><div class="kv" style="margin-top:4px">' + argKeys.map(function(k){{ return kvRow(k, args[k]); }}).join('') + '</div></details>';  }}
+  return '<div style="font-size:13px;color:var(--kind-critic)">🛠️ <b>Action:</b> ' + esc(label) + '</div>' + paramHtml;
 }}
 function renderMemoryUpdate(observeOut){{
   const mem = observeOut && typeof observeOut === 'object' ? observeOut.memory : null;
@@ -1501,15 +2142,27 @@ function renderParserDiagnostics(diag){{
 }}
 function renderCritic(data){{
   if(!Array.isArray(data) || !data.length) return '<div class="muted">No critic outputs.</div>';
-  const first = data[0];
-  if(first && typeof first === 'object'){{
+  const cards = [];
+  for(let i = 0; i < data.length; i++){{
+    const c = data[i];
+    if(!c || typeof c !== 'object') continue;
+    const actionColors = {{continue:'#4ade80', stop:'#f87171', retry:'#fbbf24'}};
+    const actionColor = actionColors[c.action] || '#94a3b8';
     const rows = [];
-    if('action' in first) rows.push(kvRow('action', first.action));
-    if('reason' in first) rows.push(kvRow('reason', first.reason));
-    if('score' in first) rows.push(kvRow('score', first.score));
-    return kvBlock(rows.length ? rows : [kvRow('critic', JSON.stringify(first))]);
+    if('action' in c) rows.push('<div style="display:flex;align-items:center;gap:6px"><span style="background:'+actionColor+';color:#000;border-radius:4px;padding:1px 6px;font-size:11px;font-weight:600">'+esc(c.action)+'</span><span style="color:#94a3b8;font-size:11px">critic #'+(i+1)+'</span></div>');
+    if('reason' in c) rows.push(kvRow('reason', c.reason));
+    if(typeof c.score === 'number'){{
+      const pct = Math.max(0, Math.min(100, Math.round(c.score * 100)));
+      const barColor = pct >= 70 ? '#4ade80' : pct >= 40 ? '#fbbf24' : '#f87171';
+      rows.push('<div style="display:flex;align-items:center;gap:8px"><span style="color:#8b949e;min-width:44px;font-size:12px">score</span><div style="flex:1;background:#1e293b;border-radius:3px;height:10px;max-width:120px"><div style="width:'+pct+'%;background:'+barColor+';border-radius:3px;height:10px"></div></div><span style="color:#c9d1d9;font-size:12px">'+c.score.toFixed(2)+'</span></div>');
+    }}
+    if(c.modified_prompt) rows.push(kvRow('modified_prompt', '<span style="color:#fbbf24">✎ prompt modified</span>'));
+    if(c.instruction_patch) rows.push(kvRow('instruction_patch', '<span style="color:#7dd3fc">+'+esc(String(c.instruction_patch).substring(0,200))+'</span>'));
+    if(c.state_patch && typeof c.state_patch === 'object') rows.push(kvRow('state_patch', '<span style="color:#c4b5fd">'+esc(JSON.stringify(c.state_patch).substring(0,200))+'</span>'));
+    if(c.details) rows.push(kvRow('details', typeof c.details === 'string' ? c.details : JSON.stringify(c.details).substring(0,300)));
+    cards.push('<div style="border:1px solid #21262d;border-radius:6px;padding:8px;margin-bottom:4px;background:#0d1117">'+(rows.length ? rows.join('') : kvRow('critic', JSON.stringify(c)))+'</div>');
   }}
-  return kvBlock([kvRow('critic', first)]);
+  return cards.length ? cards.join('') : '<div class="muted">No critic outputs.</div>';
 }}
 function renderEvents(events){{
   if(!Array.isArray(events) || !events.length) return '<div class="muted">No events.</div>';
@@ -1594,20 +2247,33 @@ function parseTs(ts){{
   const v = Date.parse(String(ts||''));
   return Number.isNaN(v) ? null : v;
 }}
+function agentColor(agentId){{
+  if(!agentId) return '#6b8fc4';
+  let hash = 0;
+  for(let i = 0; i < agentId.length; i++) hash = agentId.charCodeAt(i) + ((hash << 5) - hash);
+  const colors = ['#6b8fc4','#bfa04e','#2da46a','#9b7fd4','#c47070','#3da89c','#c47070','#5a8fbf'];
+  return colors[Math.abs(hash) % colors.length];
+}}
 function phaseColor(phase){{
   const p = String(phase||'').toLowerCase();
-  if(p.includes('state') || p.includes('observe')) return '#4db5ff';
-  if(p.includes('decide') || p.includes('model')) return '#9b8cff';
-  if(p.includes('action') || p.includes('tool')) return '#3dd68c';
-  if(p.includes('critic') || p.includes('reflect')) return '#f7b955';
-  if(p.includes('memory')) return '#46d1c2';
-  if(p.includes('done') || p.includes('stop')) return '#ff8c8c';
-  return '#7f92b8';
+  if(p.includes('handoff')) return getComputedStyle(document.documentElement).getPropertyValue('--kind-handoff').trim();
+  if(p.includes('delegate')) return getComputedStyle(document.documentElement).getPropertyValue('--kind-delegation').trim();
+  if(p.includes('fanout')) return getComputedStyle(document.documentElement).getPropertyValue('--kind-fanout').trim();
+  if(p.includes('state') || p.includes('observe')) return getComputedStyle(document.documentElement).getPropertyValue('--kind-observation').trim();
+  if(p.includes('decide') || p.includes('model')) return getComputedStyle(document.documentElement).getPropertyValue('--kind-thinking').trim();
+  if(p.includes('action') || p.includes('tool')) return getComputedStyle(document.documentElement).getPropertyValue('--kind-action').trim();
+  if(p.includes('critic') || p.includes('reflect')) return getComputedStyle(document.documentElement).getPropertyValue('--kind-critic').trim();
+  if(p.includes('memory')) return getComputedStyle(document.documentElement).getPropertyValue('--kind-memory').trim();
+  if(p.includes('done') || p.includes('stop')) return getComputedStyle(document.documentElement).getPropertyValue('--kind-done').trim();
+  return getComputedStyle(document.documentElement).getPropertyValue('--kind-other').trim();
 }}
 function inferPrimaryKind(events){{
   const es = Array.isArray(events) ? events : [];
   for(let i = es.length - 1; i >= 0; i -= 1){{
     const p = String(es[i] && es[i].phase || '').toLowerCase();
+    if(p.includes('fanout')) return 'fanout';
+    if(p.includes('handoff')) return 'handoff';
+    if(p.includes('delegate')) return 'delegation';
     if(p.includes('critic')) return 'critic';
     if(p.includes('act') || p.includes('tool')) return 'action';
     if(p.includes('state') || p.includes('observe')) return 'observation';
@@ -1617,11 +2283,11 @@ function inferPrimaryKind(events){{
 }}
 function compactStageColor(stage){{
   const s = String(stage || '').toLowerCase();
-  if(s.includes('summary')) return '#46d1c2';
-  if(s.includes('microcompact')) return '#4db5ff';
-  if(s.includes('warning')) return '#f7b955';
-  if(s.includes('overflow')) return '#ff6b6b';
-  return '#7f92b8';
+  if(s.includes('summary')) return getComputedStyle(document.documentElement).getPropertyValue('--kind-memory').trim();
+  if(s.includes('microcompact')) return getComputedStyle(document.documentElement).getPropertyValue('--kind-observation').trim();
+  if(s.includes('warning')) return getComputedStyle(document.documentElement).getPropertyValue('--kind-critic').trim();
+  if(s.includes('overflow')) return getComputedStyle(document.documentElement).getPropertyValue('--err').trim();
+  return getComputedStyle(document.documentElement).getPropertyValue('--kind-other').trim();
 }}
 function compactStageLabel(stage){{
   const s = String(stage || '').toLowerCase();
@@ -1652,6 +2318,26 @@ function paintOverview(items){{
   const rs = (m.run_spec && typeof m.run_spec === 'object') ? m.run_spec : {{}};
   const total = items.length;
   const avgEvents = total ? (items.reduce((a,it)=>a + (it.events||[]).length, 0) / total).toFixed(1) : '0.0';
+  const agentIds = new Set(items.map(function(it){{ return it.step && it.step.agent_id; }}).filter(Boolean));
+  const agentList = Array.from(agentIds);
+  const topo = (m.agent_topology && typeof m.agent_topology === 'object') ? m.agent_topology : null;
+  const handoffCount = m.handoff_count || 0;
+  const multiAgentRows = [];
+  if(agentList.length > 0) multiAgentRows.push(['agents', agentList.join(', ')]);
+  if(topo) multiAgentRows.push(['agent_topology', (topo.type || '') + (topo.agents ? ' (' + topo.agents.join(', ') + ')' : '')]);
+  if(handoffCount) multiAgentRows.push(['handoff_count', String(handoffCount)]);
+  // Count delegate/fanout events
+  let delegateCount = 0, fanoutCount = 0;
+  for(const it of items){{
+    const es = it.events || [];
+    for(const e of es){{
+      const ph = String(e.phase||'').toLowerCase();
+      if(ph.includes('delegate') && ph.includes('start')) delegateCount++;
+      if(ph.includes('fanout') && ph.includes('start')) fanoutCount++;
+    }}
+  }}
+  if(delegateCount) multiAgentRows.push(['delegate_count', String(delegateCount)]);
+  if(fanoutCount) multiAgentRows.push(['fanout_count', String(fanoutCount)]);
   overview.innerHTML = [
     ['run', payload.run_id || '-'],
     ['status', m.status || '-'],
@@ -1660,6 +2346,7 @@ function paintOverview(items){{
     ['stop', s.stop_reason || '-'],
     ['steps', String(total)],
     ['avg events/step', String(avgEvents)],
+  ].concat(multiAgentRows).concat([
     ['model', m.model_id || '-'],
     ['model family', m.model_family || rs.model_family || '-'],
     ['family preset', ((rs.metadata || {{}}).family_preset) || (((s.run_meta || {{}}).harness || {{}}).family_preset) || '-'],
@@ -1671,12 +2358,19 @@ function paintOverview(items){{
     ['prompt protocol', m.prompt_protocol || rs.prompt_protocol || '-'],
     ['parser', m.parser_name || rs.parser_name || '-'],
     ['tokens total', String(c.tokens_total || s.token_usage || 0)],
+    ['avg tokens/step', String(total > 0 ? Math.round(Number(c.tokens_total || s.token_usage || 0) / total) : 0)],
+    ['runtime (s)', String(m.latency_seconds ? Number(m.latency_seconds).toFixed(1) : '-')],
+    ['cost ($)', m.cost != null ? Number(m.cost).toFixed(4) : '-'],
     ['peak ctx', c.peak_occupancy_ratio ? ((Number(c.peak_occupancy_ratio) * 100).toFixed(1) + '%') : '-'],
     ['compacts', JSON.stringify(c.compact_counts || {{}})],
     ['parser errors', String(p.error_count || 0)],
     ['parser salvage', String(p.salvage_count || 0)],
+    ['critic interventions', String(items.reduce(function(a,it){{ return a + (Array.isArray(it.step.critic_outputs) ? it.step.critic_outputs.length : 0); }}, 0))],
+    ['critic retries', String(items.reduce(function(a,it){{ return a + (Array.isArray(it.step.critic_outputs) ? it.step.critic_outputs.filter(function(c){{ return c && c.action === 'retry'; }}).length : 0); }}, 0))],
+    ['critic stops', String(items.reduce(function(a,it){{ return a + (Array.isArray(it.step.critic_outputs) ? it.step.critic_outputs.filter(function(c){{ return c && c.action === 'stop'; }}).length : 0); }}, 0))],
+    ['critic avg score', (function(){{ const scores = []; items.forEach(function(it){{ (Array.isArray(it.step.critic_outputs) ? it.step.critic_outputs : []).forEach(function(c){{ if(c && typeof c.score === 'number') scores.push(c.score); }}); }}); return scores.length ? (scores.reduce(function(a,b){{ return a+b; }},0)/scores.length).toFixed(2) : '-'; }})()],
     ['replay note', m.replay_note || '-'],
-  ].map(([k,v])=>'<div class="ov"><div class="k">'+esc(k)+'</div><div class="v">'+esc(v)+'</div></div>').join('');
+  ]).map(([k,v])=>'<div class="ov"><div class="k">'+esc(k)+'</div><div class="v">'+esc(v)+'</div></div>').join('');
 }}
 function buildTimeline(items){{
   const rows = [];
@@ -1713,6 +2407,103 @@ function buildTimeline(items){{
     rows.push('<div class="trow"><div class="tlabel">STEP '+it.sid+'</div><div class="track">'+segs.join('')+'</div><div class="tdur">'+d+'</div></div>');
   }}
   timelineRoot.innerHTML = rows.join('') || '<div class="muted">No event timing data.</div>';
+}}
+function buildHandoffGantt(items){{
+  const el = document.getElementById('handoffGantt');
+  if(!el) return;
+  const agentOrder = [];
+  const agentSteps = {{}};
+  const handoffs = [];
+  const agentColors = ['#5e6ad2','#27a644','#e5c100','#e5484d','#6b8fc4','#d97bf0','#3dc9b0','#f59e42'];
+  function agentColor(aid){{ return agentColors[agentOrder.indexOf(aid) % agentColors.length]; }}
+  items.forEach(function(it){{
+    const aid = it.step && it.step.agent_id;
+    if(aid && !agentOrder.includes(aid)) agentOrder.push(aid);
+    if(aid){{ if(!agentSteps[aid]) agentSteps[aid] = []; agentSteps[aid].push(it.sid); }}
+    (it.events || []).forEach(function(e){{
+      const ph = String(e.phase || '').toLowerCase();
+      if(ph === 'handoff_start'){{
+        handoffs.push({{ sid: it.sid, from: (e.payload && e.payload.from) || aid || '?', to: (e.payload && e.payload.to) || '?' }});
+      }}
+    }});
+  }});
+  if(agentOrder.length < 2 && handoffs.length === 0){{
+    el.innerHTML = '<div class="muted">No handoff events recorded.</div>';
+    document.getElementById('handoffGanttSection').style.display = 'none';
+    return;
+  }}
+  const laneH = 36, labelW = 120, padTop = 20, padBottom = 28, padRight = 18, width = 980;
+  const totalSteps = items.length;
+  const plotW = width - labelW - padRight;
+  const totalH = padTop + agentOrder.length * laneH + padBottom;
+  const stepW = totalSteps > 1 ? plotW / (totalSteps - 1) : plotW;
+  function stepX(sid){{ const idx = items.findIndex(function(it){{ return it.sid === String(sid); }}); return labelW + (idx >= 0 ? idx * stepW : 0); }}
+  function laneY(ai){{ return padTop + ai * laneH + laneH / 2; }}
+  const p = [];
+  p.push('<svg class="gantt-svg" viewBox="0 0 '+width+' '+totalH+'" role="img" aria-label="Handoff gantt chart">');
+  p.push('<defs><marker id="hArrow" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="#bfa04e"/></marker></defs>');
+  items.forEach(function(it){{
+    p.push('<text class="gantt-step-label" x="'+stepX(it.sid)+'" y="'+(totalH-6)+'" text-anchor="middle">S'+esc(it.sid)+'</text>');
+  }});
+  agentOrder.forEach(function(aid, i){{
+    const y = padTop + i * laneH;
+    p.push('<rect class="gantt-lane" x="'+labelW+'" y="'+y+'" width="'+plotW+'" height="'+laneH+'"/>');
+    p.push('<text class="gantt-label" x="'+(labelW-8)+'" y="'+(y+laneH/2+4)+'" text-anchor="end">'+esc(aid)+'</text>');
+    const sids = agentSteps[aid] || [];
+    if(sids.length > 0){{
+      const mn = Math.min.apply(null, sids.map(Number));
+      const mx = Math.max.apply(null, sids.map(Number));
+      const x1 = stepX(String(mn)) - Math.min(10, stepW/2);
+      const x2 = stepX(String(mx)) + Math.min(10, stepW/2);
+      p.push('<rect class="gantt-bar" x="'+x1+'" y="'+(y+6)+'" width="'+(x2-x1)+'" height="'+(laneH-12)+'" fill="'+agentColor(aid)+'"/>');
+    }}
+  }});
+  handoffs.forEach(function(h){{
+    const fi = agentOrder.indexOf(h.from), ti = agentOrder.indexOf(h.to);
+    if(fi < 0 || ti < 0) return;
+    const x = stepX(h.sid), y1 = laneY(fi), y2 = laneY(ti);
+    const cd = y2 > y1 ? -20 : 20;
+    p.push('<path class="gantt-arrow" d="M'+x+','+y1+' C'+(x+cd)+','+((y1+y2)/2)+' '+(x+cd)+','+((y1+y2)/2)+' '+x+','+y2+'"><title>STEP '+h.sid+': '+h.from+' -> '+h.to+'</title></path>');
+  }});
+  p.push('</svg>');
+  el.innerHTML = p.join('');
+}}
+function buildCostPanel(items){{
+  const el = document.getElementById('costPanel');
+  if(!el) return;
+  const m = typeof manifest === 'object' ? manifest : {{}};
+  const s = m.summary || {{}};
+  const c = s.context || {{}};
+  const totalSteps = Number(m.step_count || items.length);
+  const tokensTotal = Number(c.tokens_total || m.token_usage || 0);
+  const avgTokens = totalSteps > 0 ? Math.round(tokensTotal / totalSteps) : 0;
+  const runtimeSec = Number(m.latency_seconds || 0);
+  const costVal = m.cost != null ? Number(m.cost) : 0;
+  if(!tokensTotal && !runtimeSec && !costVal){{
+    el.innerHTML = '<div class="muted">No cost/performance data available.</div>';
+    document.getElementById('costPanelSection').style.display = 'none';
+    return;
+  }}
+  const barH = 24, maxBar = 280, gap = 18, labelW = 130, padTop = 10, padBottom = 8;
+  const rows = [
+    {{label: 'tokens total', value: tokensTotal, max: Math.max(tokensTotal, 1), color: '#5e6ad2'}},
+    {{label: 'avg tokens/step', value: avgTokens, max: Math.max(avgTokens, 1), color: '#3dc9b0'}},
+    {{label: 'runtime (s)', value: runtimeSec, max: Math.max(runtimeSec, 1), color: '#e5c100'}},
+    {{label: 'cost ($)', value: costVal, max: Math.max(costVal, 0.001), color: '#e5484d'}},
+  ];
+  const totalH = padTop + rows.length * (barH + gap) + padBottom;
+  const width = labelW + maxBar + 80;
+  let p = ['<svg class="gantt-svg" viewBox="0 0 '+width+' '+totalH+'" role="img" aria-label="Cost summary">'];
+  rows.forEach(function(r, i){{
+    const y = padTop + i * (barH + gap);
+    const barW = Math.max(4, (r.value / r.max) * maxBar);
+    p.push('<text class="gantt-label" x="'+(labelW-8)+'" y="'+(y+barH/2+4)+'" text-anchor="end">'+esc(r.label)+'</text>');
+    p.push('<rect x="'+labelW+'" y="'+y+'" width="'+barW+'" height="'+barH+'" fill="'+r.color+'" rx="4" ry="4" fill-opacity="0.7"/>');
+    const valText = r.label.includes('cost') ? Number(r.value).toFixed(4) : String(r.value);
+    p.push('<text class="gantt-step-label" x="'+(labelW+barW+8)+'" y="'+(y+barH/2+4)+'" fill="'+r.color+'">'+esc(valText)+'</text>');
+  }});
+  p.push('</svg>');
+  el.innerHTML = p.join('');
 }}
 function buildContextTimeline(items){{
   const points = items.map(function(it){{
@@ -1763,7 +2554,25 @@ function buildContextTimeline(items){{
     const y = yAt(p.ratio);
     poly.push(x + ',' + y);
     area.push((index === 0 ? 'M' : 'L') + x + ' ' + y);
-    circles.push('<circle class="context-point" cx="' + x + '" cy="' + y + '" r="4"></circle>');
+    // Check for multi-agent events at this step
+    const step = steps.find(function(s){{ return String(s.step_id) === p.sid; }});
+    const stepEvents = step ? (eventsByStep[p.sid] || []) : [];
+    let hasHandoff = false, hasDelegate = false, hasFanout = false;
+    for(const e of stepEvents){{
+      const ph = String(e.phase||'').toLowerCase();
+      if(ph.includes('handoff')) hasHandoff = true;
+      if(ph.includes('delegate')) hasDelegate = true;
+      if(ph.includes('fanout')) hasFanout = true;
+    }}
+    const agentId = step ? (step.agent_id || '') : '';
+    const maColor = hasHandoff ? 'var(--kind-handoff)' : hasDelegate ? 'var(--kind-delegation)' : hasFanout ? 'var(--kind-fanout)' : '';
+    if(maColor){{
+      // Draw a diamond marker for multi-agent events
+      const s = 6;
+      circles.push('<polygon points="' + x + ',' + (y-s) + ' ' + (x+s) + ',' + y + ' ' + x + ',' + (y+s) + ' ' + (x-s) + ',' + y + '" fill="' + maColor + '" style="stroke:var(--surface-1)" stroke-width="1.5"><title>' + esc('STEP ' + p.sid + (agentId ? ' agent=' + agentId : '') + (hasHandoff ? ' HANDOFF' : '') + (hasDelegate ? ' DELEGATE' : '') + (hasFanout ? ' FANOUT' : '')) + '</title></polygon>');
+    }} else {{
+      circles.push('<circle class="context-point" cx="' + x + '" cy="' + y + '" r="4"' + (agentId ? ' fill="' + agentColor(agentId) + '"' : '') + '><title>' + esc('STEP ' + p.sid + (agentId ? ' agent=' + agentId : '')) + '</title></circle>');
+    }}
     labels.push('<text class="context-label" x="' + (x - 14) + '" y="' + (height - 10) + '">S' + esc(p.sid) + '</text>');
     if(Array.isArray(p.events) && p.events.length){{
       const seen = new Set();
@@ -1799,6 +2608,7 @@ function buildContextTimeline(items){{
     '<div>peak ' + esc((peak * 100).toFixed(1) + '%') + '</div>' +
     '<div>latest ' + esc(((Number(latest.ratio) || 0) * 100).toFixed(1) + '%') + ' · ' + esc(String(latest.tokens || 0)) + ' tokens</div>' +
     '<div>compact markers ' + esc(String(compactCount)) + '</div>' +
+    '<div style="display:flex;gap:10px;font-size:11px"><span style="color:var(--kind-handoff)">◆ handoff</span> <span style="color:var(--kind-delegation)">◆ delegate</span> <span style="color:var(--kind-fanout)">◆ fanout</span></div>' +
     '</div>';
   const list = compactRows.length ? ('<div class="compact-list">' + compactRows.join('') + '</div>') : '<div class="muted">No compact or warning markers recorded.</div>';
   contextTimelineRoot.innerHTML = '<div class="context-chart">' + head + svg + list + '</div>';
@@ -1809,7 +2619,7 @@ function buildParserTimeline(items){{
     const diag = (it.step && typeof it.step.parser_diagnostics === 'object') ? it.step.parser_diagnostics : null;
     if(!diag || !Object.keys(diag).length) continue;
     const sev = String(diag.severity || 'error').toLowerCase();
-    const color = sev === 'error' ? '#ff6b6b' : '#f7b955';
+    const color = sev === 'error' ? 'var(--err)' : 'var(--kind-critic)';
     const marker = diag.salvage_applied ? ' · salvage' : '';
     const protocol = diag.protocol ? (' · ' + String(diag.protocol)) : '';
     const fallback = diag.fallback_used ? ' · fallback' : '';
@@ -1821,6 +2631,134 @@ function buildParserTimeline(items){{
     );
   }}
   parserTimelineRoot.innerHTML = rows.length ? ('<div class="compact-list">' + rows.join('') + '</div>') : '<div class="muted">No parser diagnostics recorded.</div>';
+}}
+function buildCriticTimeline(items){{
+  // Collect all critic outputs across steps
+  const points = [];
+  for(const it of items){{
+    const cs = Array.isArray(it.step.critic_outputs) ? it.step.critic_outputs : [];
+    if(!cs.length) continue;
+    for(let ci = 0; ci < cs.length; ci++){{
+      const c = cs[ci];
+      if(!c || typeof c !== 'object') continue;
+      points.push({{
+        sid: it.sid,
+        action: String(c.action || ''),
+        reason: String(c.reason || ''),
+        score: typeof c.score === 'number' ? c.score : null,
+        has_patch: !!(c.modified_prompt || c.instruction_patch || c.state_patch),
+        index: ci,
+      }});
+    }}
+  }}
+  if(!points.length){{
+    criticTimelineRoot.innerHTML = '<div class="muted">No critic interventions recorded.</div>';
+    return;
+  }}
+  // Build SVG timeline
+  const width = 980;
+  const barH = 28;
+  const gap = 4;
+  const left = 56;
+  const right = 14;
+  const top = 28;
+  const bottom = 32;
+  const plotWidth = width - left - right;
+  const n = points.length;
+  const totalH = top + n * (barH + gap) + bottom;
+  const actionColors = {{continue:'#4ade80', stop:'#f87171', retry:'#fbbf24'}};
+  const rows = [];
+  const labels = [];
+  // X axis labels
+  const steps = new Set(points.map(function(p){{ return p.sid; }}));
+  const stepList = Array.from(steps).sort(function(a,b){{ return Number(a)-Number(b); }});
+  const stepToX = function(sid){{
+    const idx = stepList.indexOf(sid);
+    if(idx < 0) return left;
+    if(stepList.length === 1) return left + plotWidth/2;
+    return left + (plotWidth * idx) / (stepList.length - 1);
+  }};
+  // Grid lines for steps
+  for(let i = 0; i < stepList.length; i++){{
+    const x = stepToX(stepList[i]);
+    rows.push('<line x1="'+x+'" y1="'+top+'" x2="'+x+'" y2="'+(totalH-bottom)+'" stroke="var(--line)" stroke-width="1" stroke-dasharray="4 4"/>');
+    labels.push('<text x="'+x+'" y="'+(totalH-8)+'" fill="var(--subtle)" font-size="11" text-anchor="middle">S'+esc(stepList[i])+'</text>');
+  }}
+  // Score axis
+  for(let g = 0; g <= 4; g++){{
+    const ratio = g / 4;
+    const y = top + (1 - ratio) * (totalH - top - bottom);
+    // not used for bar chart, skip
+  }}
+  // Draw critic bars
+  const barRows = [];
+  for(let i = 0; i < n; i++){{
+    const p = points[i];
+    const y = top + i * (barH + gap);
+    const x = stepToX(p.sid);
+    const color = actionColors[p.action] || '#94a3b8';
+    const halfBar = barH / 2;
+    // Dot at step position
+    rows.push('<circle cx="'+x+'" cy="'+(y+halfBar)+'" r="'+(p.has_patch?8:5)+'" fill="'+color+'" stroke="var(--surface-1)" stroke-width="1.5"><title>STEP '+esc(p.sid)+' critic #'+(p.index+1)+' action='+esc(p.action)+(p.score!==null?' score='+p.score.toFixed(2):'')+(p.has_patch?' [has patch]':'')+'</title></circle>');
+    // Patch indicator ring
+    if(p.has_patch){{
+      rows.push('<circle cx="'+x+'" cy="'+(y+halfBar)+'" r="11" fill="none" stroke="'+color+'" stroke-width="1.5" stroke-dasharray="3 2"/>');
+    }}
+    // Label
+    const scoreText = p.score !== null ? (' '+p.score.toFixed(2)) : '';
+    const patchText = p.has_patch ? ' ✎' : '';
+    const labelText = 'S'+p.sid+' #'+(p.index+1)+' '+p.action+scoreText+patchText;
+    barRows.push('<text x="'+(left-4)+'" y="'+(y+halfBar+4)+'" fill="'+color+'" font-size="10" text-anchor="end" font-weight="600">'+esc(labelText)+'</text>');
+    // Reason tooltip line
+    if(p.reason){{
+      const truncated = p.reason.length > 60 ? p.reason.substring(0,60)+'...' : p.reason;
+      barRows.push('<text x="'+(x+14)+'" y="'+(y+halfBar+4)+'" fill="var(--muted)" font-size="10">'+esc(truncated)+'</text>');
+    }}
+  }}
+  // Score trend line (if scores available)
+  const scorePoints = points.filter(function(p){{ return p.score !== null; }});
+  let trendLine = '';
+  if(scorePoints.length >= 2){{
+    const minScore = Math.min.apply(null, scorePoints.map(function(p){{ return p.score; }}));
+    const maxScore = Math.max.apply(null, scorePoints.map(function(p){{ return p.score; }}));
+    const range = maxScore - minScore || 1;
+    const trendH = totalH - top - bottom;
+    const poly = scorePoints.map(function(p, idx){{
+      const x = stepToX(p.sid);
+      const normY = (p.score - minScore) / range;
+      // Use a separate mini area at top
+      const y = top + (1 - normY) * 40;
+      return x+','+y;
+    }});
+    trendLine = '<polyline points="'+poly.join(' ')+'" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" opacity="0.7"/>';
+    for(let si = 0; si < scorePoints.length; si++){{
+      const x = stepToX(scorePoints[si].sid);
+      const normY = (scorePoints[si].score - minScore) / range;
+      const y = top + (1 - normY) * 40;
+      trendLine += '<circle cx="'+x+'" cy="'+y+'" r="3" fill="var(--accent)"><title>score='+scorePoints[si].score.toFixed(2)+'</title></circle>';
+    }}
+  }}
+  // Summary stats
+  const continueCount = points.filter(function(p){{ return p.action === 'continue'; }}).length;
+  const stopCount = points.filter(function(p){{ return p.action === 'stop'; }}).length;
+  const retryCount = points.filter(function(p){{ return p.action === 'retry'; }}).length;
+  const patchCount = points.filter(function(p){{ return p.has_patch; }}).length;
+  const scores = points.filter(function(p){{ return p.score !== null; }}).map(function(p){{ return p.score; }});
+  const avgScore = scores.length ? (scores.reduce(function(a,b){{ return a+b; }},0)/scores.length).toFixed(2) : '-';
+  const head = '<div class="context-head">' +
+    '<div>interventions ' + esc(String(n)) + '</div>' +
+    '<div style="display:flex;gap:10px;font-size:11px">' +
+    '<span style="color:#4ade80">● continue ' + continueCount + '</span>' +
+    '<span style="color:#f87171">● stop ' + stopCount + '</span>' +
+    '<span style="color:#fbbf24">● retry ' + retryCount + '</span>' +
+    '</div>' +
+    '<div>patches ' + esc(String(patchCount)) + '</div>' +
+    '<div>avg score ' + esc(String(avgScore)) + '</div>' +
+    '</div>';
+  const svg = '<svg class="context-svg" viewBox="0 0 '+width+' '+totalH+'" role="img" aria-label="Critic timeline">' +
+    rows.join('') + barRows.join('') + trendLine + labels.join('') +
+    '</svg>';
+  criticTimelineRoot.innerHTML = '<div class="context-chart">' + head + svg + '</div>';
 }}
 function renderPromptMetadata(meta){{
   if(!meta || typeof meta !== 'object' || !Object.keys(meta).length){{
@@ -1841,23 +2779,60 @@ function renderPromptMetadata(meta){{
   if(meta.continuation_injected !== undefined) rows.push(kvRow('continuation injected', String(!!meta.continuation_injected)));
   return rows.length ? rows.join('') : '<div class="muted">No prompt metadata recorded.</div>';
 }}
+function renderMultiAgentEvent(events){{
+  let html = '';
+  for(const e of events){{
+    const ph = String(e.phase||'').toLowerCase();
+    const pl = (e.payload && typeof e.payload === 'object') ? e.payload : {{}};
+    if(ph === 'handoff_start'){{
+      const from = pl.from || '?';
+      const to = pl.to || '?';
+      html += '<div style="padding:8px 10px;margin:4px 0;border-radius:var(--radius-md);background:var(--surface-2);border:1px solid var(--line);font-size:12px;color:var(--kind-handoff)">&#x21C4; <b>Handoff</b> ' + esc(from) + ' &rarr; ' + esc(to) + '</div>';
+    }} else if(ph === 'handoff_end'){{
+      html += '<div style="padding:6px 10px;margin:4px 0;border-radius:var(--radius-md);background:var(--surface-2);border:1px solid var(--line);font-size:11px;color:var(--muted)">&#x21C4; Handoff complete</div>';
+    }} else if(ph === 'delegate_start'){{
+      const agent = pl.agent_name || pl.agent || '?';
+      const task = pl.task ? truncateText(pl.task, 120) : '';
+      html += '<div style="padding:8px 10px;margin:4px 0;border-radius:var(--radius-md);background:var(--surface-2);border:1px solid var(--line);font-size:12px;color:var(--kind-delegation)">&#x2197; <b>Delegate</b> &rarr; ' + esc(agent) + (task ? ' <span style="color:var(--muted)">' + esc(task) + '</span>' : '') + '</div>';
+    }} else if(ph === 'delegate_end'){{
+      const status = pl.status || 'done';
+      const color = status === 'done' ? 'var(--ok)' : 'var(--err)';
+      html += '<div style="padding:6px 10px;margin:4px 0;border-radius:var(--radius-md);background:var(--surface-2);border:1px solid var(--line);font-size:11px;color:' + color + '">&#x2197; Delegate result: ' + esc(status) + '</div>';
+    }} else if(ph === 'fanout_start'){{
+      const tc = pl.task_count || pl.num_tasks || 0;
+      html += '<div style="padding:8px 10px;margin:4px 0;border-radius:var(--radius-md);background:var(--surface-2);border:1px solid var(--line);font-size:12px;color:var(--kind-fanout)">&#x229B; <b>FanOut</b> ' + esc(String(tc)) + ' task(s) dispatched</div>';
+    }} else if(ph === 'fanout_end'){{
+      const ok = pl.succeeded || 0;
+      const fail = pl.failed || 0;
+      html += '<div style="padding:6px 10px;margin:4px 0;border-radius:var(--radius-md);background:var(--surface-2);border:1px solid var(--line);font-size:11px">&#x229B; FanOut: <span style="color:var(--ok)">' + ok + ' ok</span>, <span style="color:var(--err)">' + fail + ' fail</span></div>';
+    }}
+  }}
+  return html;
+}}
 function render(){{
   const q = (document.getElementById('q').value||'').toLowerCase();
   const eventFilter = document.getElementById('eventFilter').value;
+  const agentFilter = document.getElementById('agentFilter').value;
   const sort = document.getElementById('sort').value;
   const showObs = document.getElementById('showObs').checked;
   const showCritic = document.getElementById('showCritic').checked;
   let items = steps.map(function(s){{ return {{step:s, sid:String(s.step_id), events:(eventsByStep[String(s.step_id)]||[])}}; }});
   if(eventFilter) items = items.filter(function(it){{ return it.events.some(function(e){{ return String(e.phase||'')===eventFilter; }}); }});
+  if(agentFilter) items = items.filter(function(it){{ return (it.step.agent_id || '') === agentFilter; }});
   if(q) items = items.filter(function(it){{ return cardText(it.step,it.events).includes(q); }});
   items.sort(function(a,b){{ return sort==='desc' ? Number(b.sid)-Number(a.sid) : Number(a.sid)-Number(b.sid); }});
   paintOverview(items);
+  buildScreenshotStrip();
   buildVisualTimeline(items);
   buildTimeline(items);
+  buildHandoffGantt(items);
+  buildCostPanel(items);
   buildContextTimeline(items);
   buildParserTimeline(items);
+  buildCriticTimeline(items);
   flow.innerHTML = '';
   toc.innerHTML = '';
+  let lastAgentId = null;
   for(const it of items){{
     const d = it.step.decision || {{}};
     const obsInput = {{
@@ -1867,7 +2842,17 @@ function render(){{
     const card = document.createElement('article');
     card.className = 'card kind-' + inferPrimaryKind(it.events);
     card.id = 'step-' + it.sid;
-    let h = '<div class="card-head"><div class="step">STEP ' + it.sid + '</div><div class="muted">events ' + it.events.length + '</div></div>';
+    const agentId = it.step.agent_id || '';
+    const agentBadge = agentId ? '<span style="display:inline-block;padding:1px 8px;border-radius:999px;font-size:11px;background:' + agentColor(agentId) + '22;border:1px solid ' + agentColor(agentId) + '66;color:' + agentColor(agentId) + ';margin-left:8px">' + esc(agentId) + '</span>' : '';
+    let agentSwitch = '';
+    if(agentId && lastAgentId && lastAgentId !== agentId){{
+      agentSwitch = '<div style="padding:6px 12px;margin:0 0 4px;border-radius:var(--radius-md);background:var(--surface-2);border:1px solid var(--line);font-size:12px;color:var(--kind-handoff)">&#x26A1; Agent switched: <b>' + esc(lastAgentId) + '</b> &rarr; <b>' + esc(agentId) + '</b></div>';
+    }}
+    lastAgentId = agentId || lastAgentId;
+    let h = agentSwitch + '<div class="card-head"><div class="step">STEP ' + it.sid + agentBadge + '</div><div class="muted">events ' + it.events.length + '</div></div>';
+    // Multi-agent event banners
+    const maHtml = renderMultiAgentEvent(it.events);
+    if(maHtml) h += '<div style="margin-bottom:8px">' + maHtml + '</div>';
     if(showObs) h += sectionHtml('State', renderState(obsInput), obsInput, 'state', collapsedAll);
     h += sectionHtml('Prompt', renderPromptMetadata(it.step.prompt_metadata || {{}}), it.step.prompt_metadata || {{}}, 'prompt', collapsedAll);
     h += sectionHtml('Visual Assets', renderVisualAssets(it.step), {{visual_assets: it.step.visual_assets || [], observation_modalities: it.step.observation_modalities || [], model_input_modalities: it.step.model_input_modalities || [], model_input_visual_count: it.step.model_input_visual_count || 0}}, 'visual_assets', collapsedAll);
@@ -1883,7 +2868,8 @@ function render(){{
     const b = document.createElement('button');
     b.className = 'toc-item';
     b.type = 'button';
-    b.textContent = 'STEP ' + it.sid;
+    const tocLabel = 'STEP ' + it.sid + (agentId ? ' [' + agentId + ']' : '');
+    b.textContent = tocLabel;
     b.onclick = function(){{ const target = document.getElementById('step-' + it.sid); if(target) target.scrollIntoView({{behavior:'smooth',block:'start'}}); highlightToc(b); }};
     toc.appendChild(b);
   }}
@@ -1902,6 +2888,21 @@ function render(){{
     ef.appendChild(op);
   }});
   if(keep) ef.value = keep;
+  // Agent filter
+  const agentIds = new Set();
+  for(const s of steps){{
+    if(s.agent_id) agentIds.add(String(s.agent_id));
+  }}
+  const af = document.getElementById('agentFilter');
+  const keepAgent = af.value;
+  af.innerHTML = '<option value="">All agents</option>';
+  Array.from(agentIds).sort().forEach(function(a){{
+    const op = document.createElement('option');
+    op.value = a;
+    op.textContent = a;
+    af.appendChild(op);
+  }});
+  if(keepAgent) af.value = keepAgent;
 }}
 function highlightToc(el){{
   document.querySelectorAll('.toc-item').forEach(function(x){{ x.classList.remove('active'); }});
@@ -1909,6 +2910,7 @@ function highlightToc(el){{
 }}
 document.getElementById('q').addEventListener('input', render);
 document.getElementById('eventFilter').addEventListener('change', render);
+document.getElementById('agentFilter').addEventListener('change', render);
 document.getElementById('sort').addEventListener('change', render);
 document.getElementById('showObs').addEventListener('change', render);
 document.getElementById('showCritic').addEventListener('change', render);
@@ -1935,6 +2937,82 @@ document.addEventListener('click', function(e){{
 applyFontScale();
 applyTab();
 render();
+
+/* SSE live stream */
+let _sse = null;
+let _liveStepCount = 0;
+function startStream(){{
+  if(_sse){{ _sse.close(); _sse = null; document.getElementById('streamBtn').textContent = 'live'; document.getElementById('streamBtn').style.borderColor = ''; return; }}
+  const runId = location.pathname.split('/run/')[1] || '';
+  // Use /api/live/ for running runs (file tailing), /api/stream/ for completed runs (replay)
+  const runStatus = ((payload.manifest || {{}}).status || '').toLowerCase();
+  const isLive = runStatus === 'running';
+  const endpoint = isLive ? '/api/live/' : '/api/stream/';
+  _sse = new EventSource(endpoint + runId);
+  document.getElementById('streamBtn').textContent = isLive ? 'stop live' : 'stop stream';
+  document.getElementById('streamBtn').style.borderColor = '#4ade80';
+  _liveStepCount = 0;
+  _sse.addEventListener('run_start', e => {{
+    const d = JSON.parse(e.data);
+    _addLiveBanner('Run started: ' + esc(String(d.run_id || '')), 'var(--ok)');
+  }});
+  _sse.addEventListener('step_start', e => {{
+    const d = JSON.parse(e.data);
+    _liveStepCount++;
+    _addLiveBanner('Step ' + esc(String(d.step_id || _liveStepCount)) + ' started' + (d.agent_id ? ' agent=' + esc(String(d.agent_id)) : ''), 'var(--accent)');
+  }});
+  _sse.addEventListener('step_end', e => {{
+    const d = JSON.parse(e.data);
+    _addLiveBanner('Step ' + esc(String(d.step_id || '')) + ' completed', 'var(--kind-action)');
+  }});
+  _sse.addEventListener('handoff', e => {{
+    const d = JSON.parse(e.data);
+    const pl = (d && d.payload) || {{}};
+    _addLiveBanner('Handoff: ' + esc(String(pl.from || '')) + ' → ' + esc(String(pl.to || '')), 'var(--kind-handoff)');
+  }});
+  _sse.addEventListener('delegate', e => {{
+    const d = JSON.parse(e.data);
+    const pl = (d && d.payload) || {{}};
+    _addLiveBanner('Delegate → ' + esc(String(pl.agent_name || pl.agent || '')), 'var(--kind-delegation)');
+  }});
+  _sse.addEventListener('fanout', e => {{
+    const d = JSON.parse(e.data);
+    const pl = (d && d.payload) || {{}};
+    _addLiveBanner('FanOut: ' + esc(String(pl.task_count || pl.num_tasks || 0)) + ' tasks', 'var(--kind-fanout)');
+  }});
+  _sse.addEventListener('phase', e => {{
+    const d = JSON.parse(e.data);
+    const phase = String(d.phase || '');
+    const color = phaseColor(phase);
+    _addLiveBanner('Phase: ' + esc(phase), color);
+  }});
+  _sse.addEventListener('run_end', e => {{
+    const d = JSON.parse(e.data);
+    _addLiveBanner('Run completed: ' + esc(String(d.step_count || '')) + ' steps, stop=' + esc(String(d.stop_reason || '')), 'var(--kind-done)');
+    _sse.close(); _sse = null;
+    document.getElementById('streamBtn').textContent = 'live';
+    document.getElementById('streamBtn').style.borderColor = '';
+    setTimeout(function(){{ location.reload(); }}, 1500);
+  }});
+  _sse.onerror = () => {{
+    _sse.close(); _sse = null;
+    document.getElementById('streamBtn').textContent = 'live';
+    document.getElementById('streamBtn').style.borderColor = '';
+  }};
+}}
+function _addLiveBanner(text, color){{
+  const banner = document.createElement('div');
+  banner.style.cssText = 'padding:6px 12px;margin:2px 0;border-radius:var(--radius-md);background:var(--surface-2);border:1px solid var(--line);font-size:12px;color:'+color+';animation:fadeIn 0.3s ease';
+  banner.textContent = text;
+  // Add to top of flow
+  if(flow.firstChild){{
+    flow.insertBefore(banner, flow.firstChild);
+  }} else {{
+    flow.appendChild(banner);
+  }}
+  // Auto-remove after 30 seconds to prevent DOM bloat
+  setTimeout(function(){{ if(banner.parentNode) banner.parentNode.removeChild(banner); }}, 30000);
+}}
 </script>
 </body></html>"""
 
@@ -1979,6 +3057,7 @@ def _build_replay_records(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
                 "ok": ev.get("ok"),
                 "error": ev.get("error"),
                 "ts": ev.get("ts"),
+                "agent_id": step.get("agent_id"),
                 "title": f"[step={sid}] {phase}",
                 "body": body,
             }
@@ -2003,6 +3082,12 @@ def _infer_kind(phase: str, node: str, error: Any) -> str:
     if error:
         return "error"
     key = f"{phase} {node}".lower()
+    if "fanout" in key:
+        return "fanout"
+    if "handoff" in key:
+        return "handoff"
+    if "delegate" in key:
+        return "delegation"
     if "parser" in key:
         return "parser"
     if "plan" in key:
@@ -2039,31 +3124,33 @@ def _render_replay_html(payload: Dict[str, Any], speed_ms: int) -> str:
 <html><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>qita replay {run_id}</title>
 <style>
-:root{{--bg:#090d16;--txt:#e2f0ff;--muted:#8aa2c7;--line:#1f2f4d;--ok:#49df9a}}
-body{{margin:0;background:radial-gradient(circle at 20% 0%,#12233f,#090d16 62%);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--txt)}}
+{_DESIGN_TOKENS}
+body{{margin:0;background:var(--bg);font-family:var(--font-mono);color:var(--txt)}}
 .wrap{{max-width:1260px;margin:0 auto;padding:20px}}
 .top{{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;gap:10px;flex-wrap:wrap}}
-.btn{{display:inline-block;border:1px solid var(--line);color:var(--txt);text-decoration:none;padding:6px 10px;border-radius:8px;background:#14223d;font-size:12px;cursor:pointer}}
-.terminal{{background:#050a14;border:1px solid var(--line);border-radius:12px;overflow:hidden}}
-.bar{{background:#0b1528;border-bottom:1px solid var(--line);padding:8px 10px;color:var(--muted);font-size:12px;display:flex;justify-content:space-between;gap:10px;align-items:center}}
-.stats{{display:flex;gap:8px;flex-wrap:wrap;padding:8px 10px;border-bottom:1px solid var(--line);background:#081021}}
-.chip{{font-size:11px;color:#cde0ff;border:1px solid #28406a;border-radius:999px;padding:3px 8px;background:#0d1a31}}
+.btn{{display:inline-block;border:1px solid var(--line);color:var(--txt);text-decoration:none;padding:6px 10px;border-radius:var(--radius-md);background:var(--surface-1);font-size:12px;cursor:pointer}}
+.btn:hover{{border-color:var(--accent)}}
+.terminal{{background:var(--surface-1);border:1px solid var(--line);border-radius:var(--radius-lg);overflow:hidden}}
+.bar{{background:var(--surface-2);border-bottom:1px solid var(--line);padding:8px 10px;color:var(--muted);font-size:12px;display:flex;justify-content:space-between;gap:10px;align-items:center}}
+.stats{{display:flex;gap:8px;flex-wrap:wrap;padding:8px 10px;border-bottom:1px solid var(--line);background:var(--surface-1)}}
+.chip{{font-size:11px;color:var(--muted);border:1px solid var(--line-strong);border-radius:var(--radius-pill);padding:3px 8px;background:var(--surface-2)}}
 .screen{{padding:14px;min-height:480px;display:grid;gap:10px}}
-.replay-preview{{border:1px solid var(--line);background:#081021;border-radius:10px;padding:10px}}
-.replay-shot{{position:relative;border:1px solid #1b2a44;border-radius:8px;overflow:hidden;background:#050a14;min-height:180px;display:flex;align-items:center;justify-content:center}}
+.replay-preview{{border:1px solid var(--line);background:var(--surface-1);border-radius:var(--radius-md);padding:10px}}
+.replay-shot{{position:relative;border:1px solid var(--line);border-radius:var(--radius-md);overflow:hidden;background:var(--bg);min-height:180px;display:flex;align-items:center;justify-content:center}}
 .replay-shot img{{max-width:100%;display:block}}
 .replay-overlay{{position:absolute;inset:0;pointer-events:none}}
-.replay-dot{{position:absolute;width:12px;height:12px;border-radius:999px;background:rgba(255,107,107,.85);border:2px solid #fff;transform:translate(-50%,-50%)}}
-.card{{border:1px solid var(--line);background:#0a1224;border-radius:10px;padding:10px;box-shadow:0 6px 16px rgba(0,0,0,.25)}}
+.replay-dot{{position:absolute;width:12px;height:12px;border-radius:var(--radius-pill);background:rgba(229,72,77,.85);border:2px solid var(--txt);transform:translate(-50%,-50%)}}
+.card{{border:1px solid var(--line);background:var(--surface-1);border-radius:var(--radius-md);padding:10px}}
 .ctitle{{font-size:12px;font-weight:700;margin-bottom:6px;display:flex;justify-content:space-between;gap:8px}}
-.tag{{font-size:10px;border:1px solid var(--line);padding:1px 6px;border-radius:999px;color:#a8bbdf}}
-.kind-plan{{border-color:#8393ff}} .kind-thinking{{border-color:#ae8dff}} .kind-action{{border-color:#3dd68c}}
-.kind-parser{{border-color:#f7b955}} .kind-memory{{border-color:#46d1c2}} .kind-observation{{border-color:#4db5ff}} .kind-critic{{border-color:#f7b955}}
-.kind-done{{border-color:#ff9d9d}} .kind-error{{border-color:#ff6b6b}}
-.cbody{{white-space:pre-wrap;word-break:break-word;background:#081021;border:1px solid #1b2a44;padding:8px;border-radius:8px;font-size:12px}}
-.cursor{{display:inline-block;width:8px;height:16px;background:var(--ok);margin-left:3px;animation:blink 1s steps(2,start) infinite}}
+.tag{{font-size:10px;border:1px solid var(--line);padding:1px 6px;border-radius:var(--radius-pill);color:var(--subtle)}}
+.kind-plan{{border-color:var(--kind-plan)}} .kind-thinking{{border-color:var(--kind-thinking)}} .kind-action{{border-color:var(--kind-action)}}
+.kind-parser{{border-color:var(--kind-parser)}} .kind-memory{{border-color:var(--kind-memory)}} .kind-observation{{border-color:var(--kind-observation)}} .kind-critic{{border-color:var(--kind-critic)}}
+.kind-handoff{{border-color:var(--kind-handoff)}} .kind-delegation{{border-color:var(--kind-delegation)}} .kind-fanout{{border-color:var(--kind-fanout)}}
+.kind-done{{border-color:var(--kind-done)}} .kind-error{{border-color:var(--kind-error)}}
+.cbody{{white-space:pre-wrap;word-break:break-word;background:var(--surface-2);border:1px solid var(--line);padding:8px;border-radius:var(--radius-md);font-size:12px}}
+.cursor{{display:inline-block;width:8px;height:16px;background:var(--accent);margin-left:3px;animation:blink 1s steps(2,start) infinite}}
 .ctl{{display:flex;align-items:center;gap:8px;flex-wrap:wrap}}
-.ctl input,.ctl select{{background:#081021;border:1px solid var(--line);color:var(--txt);padding:4px 6px;border-radius:6px;font-size:12px}}
+.ctl input,.ctl select{{background:var(--surface-1);border:1px solid var(--line);color:var(--txt);padding:4px 6px;border-radius:var(--radius-sm);font-size:12px}}
 @keyframes blink{{to{{visibility:hidden}}}}
 </style></head><body>
 <div class="wrap">
@@ -2222,6 +3309,23 @@ function renderRecordBody(r){{
   if(r.kind === 'action') return '🛠️ <b>Action:</b> ' + esc(actionLabel(r.body && r.body.actions)) + '<br/>✅ <b>Direct Observation:</b> ' + esc(observationSummary(r.body && r.body.action_results));
   if(r.kind === 'observation') return '✅ <b>Direct Observation:</b> ' + esc(observationSummary(r.body && r.body.action_results));
   if(r.kind === 'memory') return '💾 <b>Memory Update:</b> ' + esc('memory context updated');
+  if(r.kind === 'handoff'){{
+    const pl = (r.body && r.body.event && r.body.event.payload) || {{}};
+    const from = pl.from || '?';
+    const to = pl.to || '?';
+    return '⇄ <b>Handoff:</b> ' + esc(from) + ' → ' + esc(to);
+  }}
+  if(r.kind === 'delegation'){{
+    const pl = (r.body && r.body.event && r.body.event.payload) || {{}};
+    const agent = pl.agent_name || pl.agent || '?';
+    const task = pl.task ? truncateText(pl.task, 180) : '';
+    return '↗ <b>Delegate:</b> → ' + esc(agent) + (task ? ' <span style="color:var(--muted)">' + esc(task) + '</span>' : '');
+  }}
+  if(r.kind === 'fanout'){{
+    const pl = (r.body && r.body.event && r.body.event.payload) || {{}};
+    const tc = pl.task_count || pl.num_tasks || 0;
+    return '⊛ <b>FanOut:</b> ' + esc(String(tc)) + ' task(s) dispatched';
+  }}
   if(r.kind === 'critic') return '🧪 <b>Critic:</b> ' + esc(criticSummary(r.body && r.body.critic_outputs));
   if(r.kind === 'done') return '🏁 <b>Done:</b> ' + esc(truncateText(JSON.stringify((r.body && r.body.summary) || {{}}), 220));
   if(r.error) return '❌ <b>Error:</b> ' + esc(truncateText(r.error, 220));
@@ -2230,10 +3334,12 @@ function renderRecordBody(r){{
 function fmt(r){{
   const err = r.error ? '<span class="tag kind-error">error</span>' : '';
   const raw = esc(JSON.stringify(r.body, null, 2));
+  const agentTag = r.agent_id ? '<span class="tag" style="border-color:var(--line-strong);color:var(--accent)">'+esc(r.agent_id)+'</span>' : '';
+  const forkBtn = r.step_id !== undefined ? '<button class="btn fork-btn" data-step="'+esc(String(r.step_id))+'" style="font-size:10px;padding:2px 6px" title="Fork from this step">fork</button>' : '';
   return '<article class="card kind-'+esc(r.kind)+'">' +
-    '<div class="ctitle"><span>'+esc(r.title)+'</span><span><span class="tag">'+esc(r.phase||'')+'</span> <span class="tag kind-'+esc(r.kind)+'">'+esc(r.kind)+'</span> '+err+'</span></div>' +
+    '<div class="ctitle"><span>'+esc(r.title)+'</span><span><span class="tag">'+esc(r.phase||'')+'</span> <span class="tag kind-'+esc(r.kind)+'">'+esc(r.kind)+'</span> '+agentTag+' '+err+' '+forkBtn+'</span></div>' +
     '<div class="cbody">'+renderRecordBody(r)+'</div>' +
-    '<details style="margin-top:8px"><summary style="cursor:pointer;color:#8aa2c7">Raw</summary><pre style="white-space:pre-wrap;background:#081021;border:1px solid #1b2a44;border-radius:8px;padding:8px">'+raw+'</pre></details>' +
+    '<details style="margin-top:8px"><summary style="cursor:pointer;color:var(--muted)">Raw</summary><pre style="white-space:pre-wrap;background:var(--surface-1);border:1px solid var(--line);border-radius:var(--radius-md);padding:8px">'+raw+'</pre></details>' +
     '</article>';
 }}
 function buildPreview(r){{
@@ -2252,7 +3358,7 @@ function buildPreview(r){{
       overlay = '<div class="replay-overlay"><div class="replay-dot" style="left:' + x + 'px;top:' + y + 'px"></div></div>';
     }}
   }}
-  preview.innerHTML = '<div class="replay-preview"><div style="font-size:12px;color:#8aa2c7;margin-bottom:8px">step ' + esc(String(r.step_id)) + ' · ' + esc(String(r.phase || '')) + '</div><div class="replay-shot"><img src="/asset?path=' + encodeURIComponent(String(shot.path)) + '" alt="replay screenshot"/>' + overlay + '</div></div>';
+  preview.innerHTML = '<div class="replay-preview"><div style="font-size:12px;color:var(--muted);margin-bottom:8px">step ' + esc(String(r.step_id)) + ' · ' + esc(String(r.phase || '')) + '</div><div class="replay-shot"><img src="/asset?path=' + encodeURIComponent(String(shot.path)) + '" alt="replay screenshot"/>' + overlay + '</div></div>';
 }}
 function shouldShow(r){{
   if(onlyErr.checked && !r.error) return false;
@@ -2294,5 +3400,21 @@ resetBtn.onclick = ()=>{{ i = 0; render(); if(playing) tick(); }};
 progress.oninput = ()=>{{ i = Number(progress.value || 0); render(); }};
 speedEl.onchange = ()=>{{ if(playing){{ clearTimeout(timer); tick(); }} }};
 onlyErr.onchange = render;
+// Fork button handler — delegate clicks via event delegation on the screen
+screen.addEventListener('click', function(e){{
+  const btn = e.target.closest('.fork-btn');
+  if(!btn) return;
+  const stepId = btn.getAttribute('data-step');
+  if(stepId === null) return;
+  fetch('/api/fork/{run_id}/' + stepId, {{method: 'POST', headers: {{'Content-Type': 'application/json'}}, body: JSON.dumps({{}})}})
+  .then(function(r){{ return r.json(); }})
+  .then(function(data){{
+    if(data.error){{ alert('Fork failed: ' + data.error); return; }}
+    const msg = 'Forked run created: ' + data.fork_run_id + '\\nView at /run/' + data.fork_run_id;
+    alert(msg);
+    window.open('/run/' + data.fork_run_id, '_blank');
+  }})
+  .catch(function(err){{ alert('Fork request failed: ' + err); }});
+}});
 tick();
 </script></body></html>"""

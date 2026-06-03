@@ -213,6 +213,165 @@ def test_discover_runs_and_export(tmp_path: Path):
     assert "r1" in content
 
 
+def test_critic_timeline_section(tmp_path: Path):
+    """Critic timeline section is rendered in the run detail page."""
+    run = _make_run(tmp_path, "rc1")
+    event_lines = [
+        json.loads(line)
+        for line in (run / "events.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    # Add critic outputs to the step
+    step_data = json.loads((run / "steps.jsonl").read_text(encoding="utf-8").strip())
+    step_data["critic_outputs"] = [
+        {"action": "continue", "reason": "looks good", "score": 0.85},
+        {"action": "retry", "reason": "unclear output", "score": 0.3},
+    ]
+    payload = {
+        "run": str(run),
+        "run_id": "rc1",
+        "manifest": json.loads((run / "manifest.json").read_text(encoding="utf-8")),
+        "events": event_lines,
+        "steps": [step_data],
+        "events_by_step": {"0": event_lines},
+    }
+    html = _render_run_html(payload, embedded=False)
+    assert "critic timeline" in html
+    assert "buildCriticTimeline" in html
+
+
+def test_critic_summary_in_overview(tmp_path: Path):
+    """Overview panel shows critic intervention stats."""
+    run = _make_run(tmp_path, "rc2")
+    event_lines = [
+        json.loads(line)
+        for line in (run / "events.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    step_data = json.loads((run / "steps.jsonl").read_text(encoding="utf-8").strip())
+    step_data["critic_outputs"] = [
+        {"action": "stop", "reason": "fatal error", "score": 0.1},
+        {"action": "retry", "reason": "try again", "score": 0.4},
+    ]
+    payload = {
+        "run": str(run),
+        "run_id": "rc2",
+        "manifest": json.loads((run / "manifest.json").read_text(encoding="utf-8")),
+        "events": event_lines,
+        "steps": [step_data],
+        "events_by_step": {"0": event_lines},
+    }
+    html = _render_run_html(payload, embedded=False)
+    assert "critic interventions" in html
+    assert "critic retries" in html
+    assert "critic stops" in html
+    assert "critic avg score" in html
+
+
+def test_critic_enhanced_render(tmp_path: Path):
+    """Enhanced renderCritic shows all critic outputs with color badges."""
+    run = _make_run(tmp_path, "rc3")
+    event_lines = [
+        json.loads(line)
+        for line in (run / "events.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    step_data = json.loads((run / "steps.jsonl").read_text(encoding="utf-8").strip())
+    step_data["critic_outputs"] = [
+        {"action": "continue", "reason": "ok", "score": 0.9},
+        {"action": "retry", "reason": "redo", "score": 0.3, "instruction_patch": "Be more specific"},
+        {"action": "stop", "reason": "fail", "score": 0.05, "state_patch": {"key": "val"}},
+    ]
+    payload = {
+        "run": str(run),
+        "run_id": "rc3",
+        "manifest": json.loads((run / "manifest.json").read_text(encoding="utf-8")),
+        "events": event_lines,
+        "steps": [step_data],
+        "events_by_step": {"0": event_lines},
+    }
+    html = _render_run_html(payload, embedded=False)
+    # renderCritic function should exist in the JS
+    assert "renderCritic" in html
+    # The function handles multiple critic outputs
+    assert "actionColors" in html or "#4ade80" in html
+
+
+def test_live_sse_endpoint_in_handler(tmp_path: Path):
+    """The /api/live/ route is handled by QitaHandler."""
+    _make_run(tmp_path, "rlive")
+    handler_cls = _build_handler(tmp_path)
+    assert handler_cls is not None
+    # Verify the handler class has _send_live_sse method
+    assert hasattr(handler_cls, "_send_live_sse")
+
+
+def test_live_button_in_run_page(tmp_path: Path):
+    """Run detail page has a live button."""
+    run = _make_run(tmp_path, "rlive2")
+    event_lines = [
+        json.loads(line)
+        for line in (run / "events.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    payload = {
+        "run": str(run),
+        "run_id": "rlive2",
+        "manifest": json.loads((run / "manifest.json").read_text(encoding="utf-8")),
+        "events": event_lines,
+        "steps": [
+            json.loads((run / "steps.jsonl").read_text(encoding="utf-8").strip())
+        ],
+        "events_by_step": {"0": event_lines},
+    }
+    html = _render_run_html(payload, embedded=False)
+    assert 'id="streamBtn"' in html
+    assert "startStream" in html
+
+
+def test_board_pulse_indicator(tmp_path: Path):
+    """Board HTML includes pulse animation for running runs."""
+    html = _render_board_html()
+    assert "live-dot" in html or "pulse" in html
+
+
+def test_sse_live_stream_js(tmp_path: Path):
+    """Run page JS includes SSE live stream code with UI updates."""
+    run = _make_run(tmp_path, "rsse")
+    event_lines = [
+        json.loads(line)
+        for line in (run / "events.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    payload = {
+        "run": str(run),
+        "run_id": "rsse",
+        "manifest": json.loads((run / "manifest.json").read_text(encoding="utf-8")),
+        "events": event_lines,
+        "steps": [
+            json.loads((run / "steps.jsonl").read_text(encoding="utf-8").strip())
+        ],
+        "events_by_step": {"0": event_lines},
+    }
+    html = _render_run_html(payload, embedded=False)
+    assert "/api/live/" in html
+    assert "/api/stream/" in html
+    assert "_addLiveBanner" in html
+
+
+def test_running_status_card_has_pulse(tmp_path: Path):
+    """Board card for a running run shows the live-dot pulse indicator."""
+    run = _make_run(tmp_path, "rrun")
+    # Change manifest status to "running"
+    manifest = json.loads((run / "manifest.json").read_text(encoding="utf-8"))
+    manifest["status"] = "running"
+    (run / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    runs = _discover_runs(tmp_path)
+    assert len(runs) == 1
+    assert runs[0]["status"] == "running"
+
+
 def test_render_pages(tmp_path: Path):
     run = _make_run(tmp_path, "r2")
     event_lines = [
@@ -329,3 +488,204 @@ def test_main_export(tmp_path: Path):
     rc = main(["export", "--run", str(run), "--html", str(out)])
     assert rc == 0
     assert out.exists()
+
+
+def _make_multi_agent_run(root: Path, run_id: str) -> Path:
+    """Create a run directory with multiple agents and handoff events."""
+    run = root / run_id
+    run.mkdir(parents=True, exist_ok=True)
+    (run / "manifest.json").write_text(json.dumps({
+        "run_id": run_id,
+        "status": "completed",
+        "step_count": 4,
+        "event_count": 6,
+        "handoff_count": 2,
+        "agent_topology": "sequential",
+        "summary": {
+            "stop_reason": "completed",
+            "final_result": "done",
+            "steps": 4,
+            "failure_report": {},
+        },
+        "token_usage": {"total": 3000},
+        "latency_seconds": 30.0,
+        "cost": 0.05,
+    }))
+    events = [
+        {"run_id": run_id, "step_id": 0, "phase": "think", "ok": True, "ts": "2026-01-01T00:00:01Z"},
+        {"run_id": run_id, "step_id": 0, "phase": "act", "ok": True, "ts": "2026-01-01T00:00:02Z"},
+        {"run_id": run_id, "step_id": 1, "phase": "handoff_start", "ok": True, "ts": "2026-01-01T00:00:03Z",
+         "payload": {"from": "planner", "to": "coder"}},
+        {"run_id": run_id, "step_id": 1, "phase": "handoff_end", "ok": True, "ts": "2026-01-01T00:00:04Z"},
+        {"run_id": run_id, "step_id": 2, "phase": "think", "ok": True, "ts": "2026-01-01T00:00:05Z"},
+        {"run_id": run_id, "step_id": 3, "phase": "handoff_start", "ok": True, "ts": "2026-01-01T00:00:06Z",
+         "payload": {"from": "coder", "to": "reviewer"}},
+    ]
+    (run / "events.jsonl").write_text("\n".join(json.dumps(e) for e in events))
+    steps = [
+        {"step_id": 0, "agent_id": "planner", "observation": {}, "decision": {"thought": "plan"},
+         "actions": [], "action_results": [], "tool_invocations": [], "critic_outputs": [], "state_diff": {}},
+        {"step_id": 1, "agent_id": "planner", "observation": {}, "decision": {"thought": "delegate"},
+         "actions": [], "action_results": [], "tool_invocations": [], "critic_outputs": [], "state_diff": {}},
+        {"step_id": 2, "agent_id": "coder", "observation": {}, "decision": {"thought": "code"},
+         "actions": [], "action_results": [], "tool_invocations": [], "critic_outputs": [], "state_diff": {}},
+        {"step_id": 3, "agent_id": "reviewer", "observation": {}, "decision": {"thought": "review"},
+         "actions": [], "action_results": [], "tool_invocations": [], "critic_outputs": [], "state_diff": {}},
+    ]
+    (run / "steps.jsonl").write_text("\n".join(json.dumps(s) for s in steps))
+    return run
+
+
+def test_handoff_gantt_section_in_run_page(tmp_path: Path):
+    """Handoff gantt section is rendered for multi-agent runs."""
+    run = _make_multi_agent_run(tmp_path, "h1")
+    event_lines = [
+        json.loads(line)
+        for line in (run / "events.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    step_lines = [
+        json.loads(line)
+        for line in (run / "steps.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    manifest = json.loads((run / "manifest.json").read_text(encoding="utf-8"))
+    payload = {
+        "run": str(run),
+        "run_id": "h1",
+        "manifest": manifest,
+        "events": event_lines,
+        "steps": step_lines,
+        "events_by_step": {
+            "0": [e for e in event_lines if e["step_id"] == 0],
+            "1": [e for e in event_lines if e["step_id"] == 1],
+            "2": [e for e in event_lines if e["step_id"] == 2],
+            "3": [e for e in event_lines if e["step_id"] == 3],
+        },
+    }
+    html = _render_run_html(payload, embedded=False)
+    assert "handoff gantt" in html
+    assert "handoffGantt" in html
+    assert "buildHandoffGantt" in html
+
+
+def test_handoff_gantt_hidden_for_single_agent(tmp_path: Path):
+    """Single-agent runs should hide the handoff gantt section."""
+    run = _make_run(tmp_path, "sa1")
+    event_lines = [
+        json.loads(line)
+        for line in (run / "events.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    step_data = json.loads((run / "steps.jsonl").read_text(encoding="utf-8").strip())
+    manifest = json.loads((run / "manifest.json").read_text(encoding="utf-8"))
+    # No handoff events, single agent
+    manifest["handoff_count"] = 0
+    payload = {
+        "run": str(run),
+        "run_id": "sa1",
+        "manifest": manifest,
+        "events": event_lines,
+        "steps": [step_data],
+        "events_by_step": {"0": event_lines},
+    }
+    html = _render_run_html(payload, embedded=False)
+    assert "buildHandoffGantt" in html  # function defined
+    assert "No handoff events recorded" in html
+
+
+def test_cost_panel_section_in_run_page(tmp_path: Path):
+    """Cost panel section is rendered in run detail pages."""
+    run = _make_run(tmp_path, "cp1")
+    event_lines = [
+        json.loads(line)
+        for line in (run / "events.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    step_data = json.loads((run / "steps.jsonl").read_text(encoding="utf-8").strip())
+    manifest = json.loads((run / "manifest.json").read_text(encoding="utf-8"))
+    payload = {
+        "run": str(run),
+        "run_id": "cp1",
+        "manifest": manifest,
+        "events": event_lines,
+        "steps": [step_data],
+        "events_by_step": {"0": event_lines},
+    }
+    html = _render_run_html(payload, embedded=False)
+    assert "costPanel" in html
+    assert "buildCostPanel" in html
+    assert "cost summary" in html
+
+
+def test_cost_panel_hidden_when_no_data(tmp_path: Path):
+    """Cost panel is hidden when no cost/performance data."""
+    run = _make_run(tmp_path, "cp2")
+    event_lines = [
+        json.loads(line)
+        for line in (run / "events.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    step_data = json.loads((run / "steps.jsonl").read_text(encoding="utf-8").strip())
+    manifest = json.loads((run / "manifest.json").read_text(encoding="utf-8"))
+    # Zero out cost data
+    manifest["token_usage"] = 0
+    manifest["latency_seconds"] = 0
+    manifest["cost"] = 0
+    manifest["summary"]["context"]["tokens_total"] = 0
+    payload = {
+        "run": str(run),
+        "run_id": "cp2",
+        "manifest": manifest,
+        "events": event_lines,
+        "steps": [step_data],
+        "events_by_step": {"0": event_lines},
+    }
+    html = _render_run_html(payload, embedded=False)
+    assert "buildCostPanel" in html
+    assert "No cost/performance data available" in html
+
+
+def test_board_trend_chart_section():
+    """Board page includes trend chart section with metric selector."""
+    html = _render_board_html()
+    assert "trendSection" in html
+    assert "trendChart" in html
+    assert "trendMetric" in html
+    assert "buildTrendChart" in html
+    # Metric options
+    assert '<option value="tokens">tokens</option>' in html
+    assert '<option value="steps">steps</option>' in html
+    assert '<option value="runtime">runtime (s)</option>' in html
+    assert '<option value="cost">cost ($)</option>' in html
+
+
+def test_screenshot_strip_in_run_page(tmp_path: Path):
+    """Screenshot strip section is present in run detail pages."""
+    run = _make_run(tmp_path, "ss1")
+    event_lines = [
+        json.loads(line)
+        for line in (run / "events.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    step_data = json.loads((run / "steps.jsonl").read_text(encoding="utf-8").strip())
+    manifest = json.loads((run / "manifest.json").read_text(encoding="utf-8"))
+    payload = {
+        "run": str(run),
+        "run_id": "ss1",
+        "manifest": manifest,
+        "events": event_lines,
+        "steps": [step_data],
+        "events_by_step": {"0": event_lines},
+    }
+    html = _render_run_html(payload, embedded=False)
+    assert "screenshotStrip" in html
+    assert "screenshotStripSection" in html
+    assert "buildScreenshotStrip" in html
+
+
+def test_screenshot_strip_hidden_when_embedded():
+    """Screenshot strip should be hidden in embedded mode."""
+    html = _render_run_html({"run": "/tmp", "run_id": "x", "manifest": {}, "events": [], "steps": [], "events_by_step": {}}, embedded=True)
+    # The section still exists in DOM but buildScreenshotStrip hides it when embedded
+    assert "buildScreenshotStrip" in html

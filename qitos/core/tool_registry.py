@@ -58,9 +58,15 @@ class ToolRegistry:
             tool_obj = self._to_tool(item)
             base_name = tool_obj.spec.name
             full_name = f"{prefix}.{base_name}" if prefix else base_name
-            tool_obj.spec.name = full_name
+            # Create a shallow copy to avoid mutating the original tool's spec
+            # when adding the namespace prefix. Without this, registering the
+            # same toolset under different namespaces would corrupt the spec.
+            from copy import copy
+            named_tool = copy(tool_obj)
+            named_tool.spec = copy(tool_obj.spec)
+            named_tool.spec.name = full_name
             self._register_tool_object(
-                tool_obj,
+                named_tool,
                 origin=ToolOrigin(
                     source="toolset",
                     toolset_name=toolset_name,
@@ -198,6 +204,7 @@ class ToolRegistry:
         return {
             "name": tool.name,
             "description": tool.spec.description,
+            "prompt": tool.spec.prompt,
             "required_ops": list(tool.spec.required_ops),
             "input_schema": dict(tool.spec.input_schema or {}),
             "output_schema": dict(tool.spec.output_schema or {}),
@@ -319,6 +326,31 @@ class ToolRegistry:
                         "produces_artifact": bool(tool.spec.produces_artifact),
                     },
                 }
+            )
+        return specs
+
+    def export_permissions(self) -> List["ToolPermissionSpec"]:
+        """Return a ToolPermissionSpec for each registered tool.
+
+        This is a QitOS-native alternative to ``get_all_specs()`` that
+        focuses on permission and capability metadata without the
+        OpenAI-style schema wrapping.
+        """
+        from .tool import ToolPermissionSpec
+
+        specs: List[ToolPermissionSpec] = []
+        for name in self.list_tools():
+            tool = self._tools[name]
+            specs.append(
+                ToolPermissionSpec(
+                    name=tool.spec.name,
+                    description=tool.spec.description,
+                    permissions=tool.spec.permissions,
+                    needs_approval=tool.spec.needs_approval,
+                    read_only=tool.spec.read_only,
+                    concurrency_safe=tool.spec.concurrency_safe,
+                    required_ops=list(tool.spec.required_ops),
+                )
             )
         return specs
 

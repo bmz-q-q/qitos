@@ -1,20 +1,20 @@
 ---
 title: "Tau-Bench"
-description: "通过 `TauBenchAdapter` 在零售与航空客服环境中评测 tool-agent-user interaction。"
+description: "通过 `TauBenchAdapter` 在零售与航空客服环境中评测工具-智能体-用户交互。"
 ---
 
-Tau-Bench 用来评测 agent 作为客服代表时的表现：它需要阅读 policy wiki、调用数据工具，并在不违反业务规则的前提下完成模拟用户请求。
+Tau-Bench 用来评测智能体作为客服代表时的表现：它需要阅读策略文档、调用数据工具，并在不违反业务规则的前提下完成模拟用户请求。
 
 QitOS 提供：
 
 - `TauBenchAdapter`
 - 自包含运行时 `TauRuntimeEnv`
 
-因此你不必额外安装上游 `tau_bench` 包，就可以直接运行该 benchmark。
+因此你不必额外安装上游 `tau_bench` 包，就可以直接运行该基准测试。`TauRuntimeEnv` 提供了自包含的运行时环境。
 
 ## 可用环境
 
-| 环境 | 可用 split | 终止工具 |
+| 环境 | 可用划分 | 终止工具 |
 |---|---|---|
 | `retail` | `train`、`dev`、`test` | `transfer_to_human_agents` |
 | `airline` | `test` | `transfer_to_human_agents` |
@@ -27,7 +27,7 @@ export OPENAI_API_KEY="sk-..."
 ```
 
 <Note>
-Tau-Bench 的任务数据已经 vendored 进 QitOS 包中，无需额外下载。
+Tau-Bench 的任务数据已经内置于 QitOS 包中，无需额外下载。
 </Note>
 
 ## 加载任务
@@ -40,7 +40,7 @@ records = adapter.load_records()
 tasks = adapter.to_tasks(records, split="test", limit=5)
 ```
 
-也可以用一行式 loader：
+也可以用一行式加载器：
 
 ```python
 from qitos.benchmark.tau_bench.adapter import load_tau_bench_tasks
@@ -50,7 +50,7 @@ tasks = load_tau_bench_tasks(env_name="retail", split="test", limit=10)
 
 ## 运行评测
 
-优先使用官方 CLI：
+优先使用官方命令行：
 
 ```bash
 qit bench run \
@@ -69,7 +69,7 @@ qit bench eval --input results/tau_retail_test.jsonl --json
 qita board --logdir runs
 ```
 
-`tau_bench_eval.py` 依然保留，但它现在只是同一套官方结果结构与 trace 契约上的 benchmark wrapper。
+`tau_bench_eval.py` 依然保留，但它现在只是同一套官方结果结构与追踪记录契约上的基准测试封装器。
 
 运行单个任务：
 
@@ -83,7 +83,7 @@ python examples/benchmarks/tau_bench_eval.py \
   --api-key "$OPENAI_API_KEY"
 ```
 
-运行完整 benchmark：
+运行完整基准测试：
 
 ```bash
 python examples/benchmarks/tau_bench_eval.py \
@@ -99,18 +99,13 @@ python examples/benchmarks/tau_bench_eval.py \
   --api-key "$OPENAI_API_KEY"
 ```
 
-## runtime 如何工作
+## 运行时如何工作
 
-`TauRuntimeEnv` 提供了最小可替换的 `reset / step / calculate_reward` 接口。reward 通过重放 ground-truth action sequence 并比较最终状态哈希来计算。
+`TauRuntimeEnv` 提供了最小可替换的 `reset / step / calculate_reward` 接口。奖励通过重放真实动作序列并比较最终状态哈希来计算。
 
-Agent 只有在：
+智能体只有在工具调用引起了正确状态转移、且文本回复中包含了要求的输出值时，才会得到 `1.0`。
 
-- 工具调用引起了正确状态转移
-- 文本回复中包含了要求的输出值
-
-时，才会得到 `1.0`。
-
-## 如何检查结果
+## 检查结果
 
 典型结果 JSONL 会记录：
 
@@ -123,7 +118,7 @@ Agent 只有在：
 - `steps`
 - `latency_seconds`
 
-你也可以用 `qita` 检查具体 run：
+你也可以用 `qita` 检查具体运行：
 
 ```bash
 qita board --logdir runs

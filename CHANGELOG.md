@@ -15,10 +15,88 @@ How to update:
 - Move `Unreleased` notes into a dated or versioned section when publishing a release
 - Prefer user-facing changes, upgrade notes, and important engineering changes over low-level edit logs
 
-## Unreleased
+## v0.6.0 (2026-05-28)
 
 ### Added
 
+- **WebBrowserEnv**: Playwright-backed web browser environment (`qitos.kit.env.web`) with `MockBrowserProvider` and `PlaywrightBrowserProvider`, extending desktop GUI actions with `navigate`, `go_back`, `go_forward`, `switch_tab`, `close_tab`. Optional dep: `pip install qitos[web]`
+- **qita Screenshot Strip**: Interactive horizontal thumbnail strip at the top of run detail pages, showing one thumbnail per step with screenshot. Click thumbnail to scroll to step card. Grounding failure and critic retry indicators.
+- **qita Action Overlay**: Click/action markers on screenshots with coordinate labels. Red markers for grounding failures, green for success. Navigate actions shown with URL badge.
+- **qita Observation Pack Viewer**: Expandable per-step panel showing DOM, accessibility tree, OCR spans, UI candidates, and grounding metadata. Toggle with "observation pack" button.
+- **qita Branch Comparison**: `/compare-branches/{run_id}/{step_id}` route for side-by-side branch candidate comparison with grounding failure banner.
+- **MultimodalCapabilityProfile**: Model-aware observation adaptation in `qitos.models.profile_registry`. Vision models receive screenshots; text-only models receive DOM + OCR fallback.
+- **AgentSpec.model_override / tools_override**: Override the sub-agent's model and tool registry for delegation.
+- **AgentSpec.__post_init__ validation**: Empty name raises ValueError.
+- **AgentRegistry.get_handoff_tools()**: Returns `HandoffTool` instances for Decision-mode handoff.
+- **DelegateTool nested delegation fix**: `_build_sub_engine()` now passes `agent_registry` enabling depth-2+ delegation.
+- **DelegateEventInterceptor**: First-class `DELEGATE_START`/`DELEGATE_END` events in `EngineResult.events` when `agent_registry` is provided.
+- **Sub-trace writer depth-aware run_id**: `f"{parent_run_id}__delegate_{agent_name}_depth{depth}"` prevents collisions.
+- **ReviewerAgent** in delegate example demonstrating multi-delegation with `ContextStrategy.SUMMARY`.
+- **v0.7 handoff scope document**: Documents what is in v0.6 vs v0.7 scope for handoff/Decision mode.
+
+### Changed
+
+- `DelegateTool._build_sub_engine()`: now passes `agent_registry`, applies `model_override`/`tools_override` from `AgentSpec`.
+- `DelegateTool._build_sub_trace_writer()`: includes `current_depth` in sub-run-id for uniqueness.
+- `qita renderActionOverlay()`: now shows grounding failure banners inline.
+- Engine auto-registers `DelegateEventInterceptor` when `agent_registry` is provided.
+
+## v0.5.0 (2026-05-27)
+
+### Added
+
+- Added `CORE_BOUNDARY.md`, a core governance audit, a dependency audit, and a staged `qitos-zoo` migration manifest for product-grade agents.
+- Added regression tests for public API and examples governance.
+- Added `FamilyPreset.override()` for programmatic preset customization and `recommended_models`, `recommended_protocol`, `recommended_parser` advisory fields.
+- Added `MaxTokensCriteria` stop criterion so engines can halt when accumulated output tokens exceed a budget.
+- Added `CriticTrace` and `HandoffTrace` export APIs for programmatic access to critic decisions and multi-agent handoff data.
+- Added `EngineConfig` export API for inspecting engine configuration outside the engine runtime.
+- Added `ToolPermissionSpec` for declarative tool permission policies.
+- Added `WandbTraceProcessor` for W&B experiment tracking integration (`pip install qitos[wandb]`).
+- Added `MlflowTraceProcessor` for MLflow experiment tracking integration (`pip install qitos[mlflow]`).
+- Added qita cost panel showing token usage and cost metrics in the run overview.
+- Added `qit --version` and `qita --version` CLI flags.
+- Added `qit new --template <name>` CLI for scaffolding new agent projects from built-in cookiecutter templates.
+- Added `qit list-templates` CLI for listing built-in scaffold and method templates.
+- Added 5 method template recipe implementations:
+  - `qitos.recipes.self_refine` — Self-Refine pattern (generate → critique → refine)
+  - `qitos.recipes.reflexion` — Reflexion pattern (act → reflect → retry with memory)
+  - `qitos.recipes.lats` — LATS pattern (Monte Carlo tree search with UCB1 scoring and reflection)
+  - `qitos.recipes.moa` — MoA pattern (parallel proposals + aggregation layers)
+  - `qitos.recipes.magentic_one` — Magentic-One pattern (orchestrator + specialist workers with stall detection)
+- Added 12 method template directories under `templates/` with `paper.md`, `config.yaml`, `agent.py`, and `__init__.py`:
+  - react, plan_act, swe_agent, voyager, debate, manager_worker, planner_executor, self_refine, reflexion, lats, moa, magentic_one
+- Added eval config YAML files for LATS, MoA, and Magentic-One under `qitos/recipes/benchmarks/eval_configs/`.
+- Added bilingual method-templates guide covering all 12 templates with quickstart code, parameters, and state fields.
+- Added LATS, MoA, and Magentic-One terms to bilingual glossary.
+- Added `cookiecutter` optional extra (`pip install qitos[cookiecutter]`).
+
+### Changed
+
+- Tightened QitOS public/default surfaces around kernel-first contracts and moved product-grade agent positioning toward `qitos-zoo`.
+- Updated examples policy so canonical examples are teaching-first and product-like agents are marked for migration.
+- Refreshed README.md with v0.5.0 content: 12 method templates table, `qit --version` in quickstart, Beta status, optional extras, and method-templates guide link.
+
+### Fixed
+
+- Restored engine final/wait lifecycle behavior so reduce, parser feedback, hooks, checkpoints, and memory records are preserved.
+- Fixed `_TEMPLATES_DIR` path resolution in `qit new` so template directories at repo root are found correctly.
+
+## v0.4.0 (2026-05-13)
+
+### Added
+
+- Added `qitos.cache` package with `CacheBackend` ABC, `InMemoryCache` (LRU + TTL), `DiskCache` (file-per-key), and `CachedModel` wrapper that transparently caches any `Model` instance — zero Engine changes required.
+- Added `qitos.config` package with `AgentConfig`, `ModelConfig`, `DatasetItem`, `load_agent_config()` for YAML-driven agent setup with `${ENV_VAR}` resolution, and `build_model()`, `build_run_spec()`, `build_tool_registry()` builders.
+- Added `qitos.checkpoint` package with `CheckpointData` and `CheckpointManager` for run persistence and resume support. Engine auto-saves checkpoints at configurable intervals.
+- Added `qitos.experiment` package with `ExperimentRunner`, `ExperimentResult`, `SweepSpec`, and `sweep_product()` for parameter-sweep experiments with concurrent execution, resume support, and result persistence.
+- Added `EngineResult.run_id` field so callers can track run identity after engine execution completes.
+- Added `qit experiment run --config <yaml>` CLI subcommand for experiment execution from YAML configs.
+- Added `AsyncEngine` with `arun()` and `arun_stream()` methods for non-blocking agent execution inside `asyncio` event loops.
+- Added `EngineEvent`, `EngineEventType`, and `EventStream` for structured real-time event streaming from engine runs.
+- Added `AsyncOpenAICompatibleModel` and `AsyncOpenAIModel` with `_acall_api()` and `acall_raw()` using `openai.AsyncOpenAI`.
+- Added SSE endpoint `/api/stream/{run_id}` to qita for streaming run events as Server-Sent Events.
+- Added "live stream" button to qita run detail page for real-time event viewing.
 - Added bilingual third-party benchmark integration guidance explaining the official `framework / benchmark / recipe` boundary, required family package structure, normalized result expectations, and qita/trace compatibility rules for future benchmark contributors.
 - Added a new `qitos.benchmark.osworld` family with dataset adapter, runtime hook, evaluator bridge, scorer, and built-in runner entrypoints for the real OSWorld benchmark path.
 - Added a new `qitos.recipes.desktop.osworld_starter` recipe layer so the canonical desktop baseline can be reused by examples, benchmark runners, and docs without depending on `examples/`.

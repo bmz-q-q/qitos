@@ -13,6 +13,7 @@ Supported flows:
 2. runtime prompt-driven installation with `search_skills` / `install_skill`
 """
 
+
 from __future__ import annotations
 
 import argparse

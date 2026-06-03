@@ -46,7 +46,17 @@ setup(
         "llm agents, ai agents, agent research, benchmark, reproducibility, "
         "trajectory analysis, coding agent, tool using agents, qita"
     ),
-    packages=find_packages(exclude=["tests*", "examples*", "templates*", "docs*"]),
+    packages=find_packages(
+        exclude=[
+            "tests*",
+            "examples*",
+            "templates*",
+            "docs*",
+            "plans*",
+            "qitos.examples*",
+            "qitos_zoo*",
+        ]
+    ),
     python_requires=">=3.10",
     install_requires=[
         "requests>=2.31.0",
@@ -58,6 +68,11 @@ setup(
         "models": ["openai>=1.0.0", "litellm>=1.52.0"],
         "yaml": ["pyyaml>=6.0"],
         "benchmarks": ["datasets>=2.20.0", "huggingface_hub>=0.24.0"],
+        "wandb": ["wandb>=0.16.0"],
+        "mlflow": ["mlflow>=2.0.0"],
+        "cookiecutter": ["cookiecutter>=2.1.0"],
+        "hf": ["huggingface_hub>=0.24.0"],
+        "web": ["playwright>=1.40.0"],
         "dev": [
             "build>=1.2.1",
             "twine>=5.1.1",
@@ -75,6 +90,9 @@ setup(
             "pyyaml>=6.0",
             "datasets>=2.20.0",
             "huggingface_hub>=0.24.0",
+            "wandb>=0.16.0",
+            "mlflow>=2.0.0",
+            "cookiecutter>=2.1.0",
         ],
     },
     package_data={

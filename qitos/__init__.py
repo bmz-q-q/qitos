@@ -5,7 +5,7 @@ QitOS public API surface.
 
 """
 
-__version__ = "0.3.0"
+__version__ = "0.6.0"
 
 from .core.agent_module import AgentModule
 from .core.action import Action
@@ -26,6 +26,7 @@ from .core.task import (
     TaskResult,
 )
 from .core.tool import (
+    BaseTool,
     ToolPermissionContext,
     ToolPermissionDecision,
     ToolPermissionRule,
@@ -33,12 +34,19 @@ from .core.tool import (
     tool,
 )
 from .core.tool_registry import ToolRegistry
+from .core.agent_spec import AgentSpec, AgentRegistry, ContextStrategy, HandoffContext, StateAdapter
 from .engine.engine import Engine, EngineResult, StepSummary
+from .engine.async_engine import AsyncEngine
+from .engine.events import EngineEvent, EngineEventType, EventStream
 from .engine.states import ContextConfig
 
 __all__ = [
     "AgentModule",
     "Engine",
+    "AsyncEngine",
+    "EngineEvent",
+    "EngineEventType",
+    "EventStream",
     "EngineResult",
     "StepSummary",
     "ContextConfig",
@@ -60,12 +68,18 @@ __all__ = [
     "BenchmarkRunResult",
     "Env",
     "EnvSpec",
+    "BaseTool",
     "tool",
     "ToolPermissionContext",
     "ToolPermissionDecision",
     "ToolPermissionRule",
     "ToolValidationResult",
     "ToolRegistry",
+    "AgentSpec",
+    "AgentRegistry",
+    "ContextStrategy",
+    "HandoffContext",
+    "StateAdapter",
     "StopReason",
     "QitosRuntimeError",
 ]

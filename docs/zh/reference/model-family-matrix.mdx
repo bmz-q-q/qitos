@@ -1,27 +1,37 @@
 ---
-title: "Model Family Matrix"
-description: "QitOS v0.4 内建 gold presets 的默认 harness 策略矩阵。"
+title: "模型家族矩阵"
+description: "QitOS v0.4 内建家族预设的默认适配层策略矩阵。"
 ---
 
-| Family | Transport | 默认 protocol | Fallback chain | Tool delivery | 说明 |
-|---|---|---|---|---|---|
-| Qwen | OpenAI-compatible | `json_decision_v1` | `xml_decision_v1 -> react_text_v1` | `api_parameter` | 如果 endpoint 返回 `tool_calls`，会优先走 native tool-call lane |
-| GLM | OpenAI-compatible | `json_decision_v1` | `xml_decision_v1 -> react_text_v1` | `api_parameter` | 如果 endpoint 返回 `tool_calls`，会优先走 native tool-call lane；默认面向 GLM-5.1 这类 OpenAI-compatible 服务 |
-| Kimi | OpenAI-compatible | `json_decision_v1` | `react_text_v1` | `api_parameter` | 在不明显改 prompt 的前提下切换到 Kimi |
-| MiniMax | OpenAI-compatible | `minimax_tool_call_v1` | `terminus_xml_v1 -> terminus_json_v1 -> json_decision_v1` | `api_parameter` | 保留 MiniMax 特有 parser 优势 |
-| `gpt-oss` | OpenAI-compatible | `json_decision_v1` | `react_text_v1` | `api_parameter` | 面向 open-weight / 第三方 compatible serving |
-| Gemma 4 | OpenAI-compatible | `json_decision_v1` | `react_text_v1` | `prompt_injection` | 面向 served Gemma 4，不绑定 Gemini SDK |
+| 家族 | 传输层 | 默认协议 | 后备链 | 工具交付方式 | 上下文窗口 | 推荐模型 |
+|---|---|---|---|---|---|---|
+| Qwen | OpenAI 兼容 | `json_decision_v1` | `xml_decision_v1 → react_text_v1` | `api_parameter` | 128k | `Qwen/Qwen3-8B`, `qwen-plus`, `Qwen/Qwen3-32B` |
+| Kimi | OpenAI 兼容 | `json_decision_v1` | `react_text_v1` | `api_parameter` | 128k | `kimi-k2-0905-preview`, `moonshot-v1-128k` |
+| MiniMax | OpenAI 兼容 | `minimax_tool_call_v1` | `terminus_xml_v1 → terminus_json_v1 → json_decision_v1` | `api_parameter` | 128k | `MiniMax-M2.5` |
+| `gpt-oss` | OpenAI 兼容 | `json_decision_v1` | `react_text_v1` | `api_parameter` | 128k | `gpt-oss-120b`, `gpt-oss-20b` |
+| Gemma 4 | OpenAI 兼容 | `json_decision_v1` | `react_text_v1` | `prompt_injection` | 128k | `gemma-4-31b-it`, `gemma-4-26b-a4b-it` |
+| OpenAI | OpenAI 兼容 | `json_decision_v1` | `react_text_v1` | `api_parameter` | 128k | `gpt-4.1`, `gpt-4o` |
+| Anthropic | OpenAI 兼容 | `react_text_v1` | `json_decision_v1` | `prompt_injection` | 200k | `claude-sonnet-4-5` |
+| Gemini | OpenAI 兼容 | `xml_decision_v1` | `json_decision_v1 → react_text_v1` | `prompt_injection` | 1M | `gemini-2.5-pro` |
+| DeepSeek | OpenAI 兼容 | `json_decision_v1` | `tool_use_xml_v1 → react_text_v1` | `api_parameter` | 128k | `ds-v4-pro`, `ds-v4-flash`, `deepseek-chat` |
+| GLM | OpenAI 兼容 | `json_decision_v1` | `xml_decision_v1 → react_text_v1` | `api_parameter` | 200k | `GLM-5.1-sii`, `zai-org/GLM-5.1-FP8` |
+
+## 黄金预设
+
+前五个家族（Qwen、Kimi、MiniMax、`gpt-oss`、Gemma 4）是**黄金预设**——QitOS 团队在每次发版时验证得最充分的配置。当你刚上手或需要跑基准对比时，优先选择黄金预设。
+
+后五个（OpenAI、Anthropic、Gemini、DeepSeek、GLM）是**兼容预设**。它们为各自的家族提供了正确的协议和上下文默认值，但随着专用适配器的加入可能会演进。
 
 ## 正确理解这张表
 
-这张表不是“模型排行榜”。
+这张表不是模型排行榜。
 
-它表达的是：当你在 QitOS 里选择某个 family preset 时，框架默认会采用什么模型侧契约。
+它表达的是：当你在 QitOS 里选择某个家族预设（预配置的模型家族默认值）时，框架默认会采用什么模型侧契约。
 
-如果你需要改某一项，请显式 override：
+如果你需要改某一项，请显式覆盖：
 
-- override protocol
-- override base URL
-- override model name
+- 用 `build_model_for_preset(protocol=...)` 覆盖协议
+- 用 `build_model_for_preset(tool_delivery=...)` 覆盖工具交付方式
+- 用 `preset.override()` 扩展预设——参见[家族预设](/zh/concepts/family-presets)
 
-不要把整个 example 分叉成另一套实现。
+不要把整个示例分叉成另一套实现。

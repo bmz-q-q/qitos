@@ -2,17 +2,24 @@
 
 from __future__ import annotations
 
+import logging
 import time
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, field
 from typing import Any, Callable, Dict, Generic, List, Optional, TypeVar
 from uuid import uuid4
 
+_logger = logging.getLogger("qitos.engine")
+
+from ..checkpoint.store import Checkpoint, CheckpointConfig, CheckpointId, CheckpointMetadata, CheckpointStore, StateVersions
+from ..checkpoint.versioning import StateVersionTracker
+from ..checkpoint.durability import DurabilityManager, DurabilityMode
+from ..checkpoint.pending_writes import PendingWriteManager
 from ..core.agent_module import AgentModule
-from ..core.action import ActionExecutionPolicy
 from ..core.decision import Decision
 from ..core.errors import ErrorCategory, StopReason
 from ..core.env import Env, EnvObservation, EnvStepResult
 from ..core.history import History, HistoryMessage, HistoryPolicy
+from ..core.interceptor import InterceptorChain, ToolInterceptor
 from ..core.memory import Memory, MemoryRecord
 from ..core.state import StateSchema
 from ..core.task import Task, TaskResult, TaskValidationIssue
@@ -26,15 +33,27 @@ from ._control_runtime import _ControlRuntime
 from ._env_runtime import _EnvRuntime
 from ._loop_detector import ToolCallLoopDetector
 from ._model_runtime import _ModelRuntime
+from ._handoff_runtime import _HandoffRuntime
 from ._trace_runtime import _TraceRuntime
 from .action_executor import ActionExecutor
+from .cancellation import CancelMode, CancelToken
 from .branching import BranchSelector, FirstCandidateSelector
 from .critic import Critic
 from .hooks import EngineHook, HookContext
 from .parser import Parser
 from .recovery import RecoveryPolicy, build_failure_report
 from .search import Search
-from .states import ContextConfig, RuntimeBudget, RuntimeEvent, RuntimePhase, StepRecord
+from .states import (
+    ContextConfig,
+    CriticTrace,
+    EngineConfig,
+    HandoffTrace,
+    RuntimeBudget,
+    RuntimeEvent,
+    RuntimePhase,
+    StepRecord,
+    StepResult,
+)
 from .stop_criteria import FinalResultCriteria, StopCriteria
 from .validation import StateValidationGate
 
@@ -133,6 +152,23 @@ class EngineResult(Generic[StateT]):
     task_result: Optional[TaskResult] = None
     runtime_seconds: float = 0.0
     total_tokens: int = 0
+    run_id: str = ""
+    critic_traces: List[CriticTrace] = field(default_factory=list)
+    handoff_traces: List[HandoffTrace] = field(default_factory=list)
+    _cancel_token: Optional[CancelToken] = None
+
+    def cancel(self, mode: str = "immediate") -> None:
+        """Request cancellation of the running Engine.
+
+        Parameters
+        ----------
+        mode : str
+            ``"immediate"`` — stop as soon as possible (may be mid-step).
+            ``"after_step"`` — wait for the current step to complete first.
+        """
+        if self._cancel_token is None:
+            return
+        self._cancel_token.request_cancel(mode)
 
     @property
     def tool_calls_by_name(self) -> Dict[str, int]:
@@ -206,6 +242,8 @@ class EngineResult(Generic[StateT]):
             "tool_calls_by_name": self.tool_calls_by_name,
             "success_rate": self.success_rate,
             "step_summaries": [item.to_dict() for item in self.step_summaries],
+            "critic_traces": [ct.to_dict() for ct in self.critic_traces],
+            "handoff_traces": [ht.to_dict() for ht in self.handoff_traces],
             "task_result": task_result_dict,
             "state": self.state.to_dict() if hasattr(self.state, "to_dict") else self.state,
         }
@@ -217,7 +255,10 @@ class Engine(Generic[StateT, ObservationT, ActionT]):
     def __init__(
         self,
         agent: AgentModule[StateT, ObservationT, ActionT],
+        agent_registry: Optional[Any] = None,
         budget: Optional[RuntimeBudget] = None,
+        delegate_depth: int = 0,
+        shared_memory: Any = None,
         validation_gate: Optional[StateValidationGate] = None,
         recovery_handler: Optional[RecoveryHandler] = None,
         recovery_policy: Optional[RecoveryPolicy] = None,
@@ -233,10 +274,29 @@ class Engine(Generic[StateT, ObservationT, ActionT]):
         hooks: Optional[List[EngineHook]] = None,
         render_hooks: Optional[List[Any]] = None,
         context_config: Optional[ContextConfig | Dict[str, Any]] = None,
+        cache_backend: Optional[Any] = None,
+        checkpoint_manager: Optional[Any] = None,
+        checkpoint_store: Optional[CheckpointStore] = None,
+        checkpoint_durability: DurabilityMode = DurabilityMode.SYNC,
+        permission_pipeline: Optional[Any] = None,
+        read_before_write_enforcer: Optional[Any] = None,
+        permission_interaction_callback: Optional[Any] = None,
+        loop_detector: Optional[ToolCallLoopDetector] = None,
+        tracing_provider: Optional[Any] = None,
+        interceptors: Optional[List[ToolInterceptor]] = None,
+        auto_approve: bool = False,
     ):
         self.agent = agent
+        self.agent_registry = agent_registry
+        self._delegate_depth = delegate_depth
+        self._shared_memory = shared_memory
         self.tool_registry = agent.tool_registry
-        self.budget = budget or RuntimeBudget(max_steps=10)
+        # Ensure Engine always has a ToolRegistry — agents without tools still
+        # need one for handoff/permission tools registered by the Engine itself.
+        if self.tool_registry is None:
+            from ..core.tool_registry import ToolRegistry as _TR
+            self.tool_registry = _TR()
+        self.budget = budget or RuntimeBudget()
         self._base_budget = RuntimeBudget(
             max_steps=self.budget.max_steps,
             max_runtime_seconds=self.budget.max_runtime_seconds,
@@ -270,10 +330,34 @@ class Engine(Generic[StateT, ObservationT, ActionT]):
             self._uses_default_stop_criteria = False
             self.stop_criteria = list(stop_criteria)
 
+        # Wire permission pipeline and RBW enforcer: explicit params > agent attrs
+        resolved_pipeline = permission_pipeline or getattr(agent, "permission_pipeline", None)
+        resolved_rbw = read_before_write_enforcer or getattr(agent, "_rbw_enforcer", None)
+
+        # Build interceptor chain from interceptors list
+        self._interceptor_chain: Optional[InterceptorChain] = None
+        all_interceptors: List[ToolInterceptor] = list(interceptors or [])
+        self._delegate_interceptor: Optional[Any] = None
+        if agent_registry is not None:
+            from .interceptors import DelegateEventInterceptor
+            self._delegate_interceptor = DelegateEventInterceptor(event_sink=None)
+            all_interceptors.append(self._delegate_interceptor)
+        if all_interceptors:
+            self._interceptor_chain = InterceptorChain(all_interceptors)
+
+        self.auto_approve = auto_approve
         self.executor = (
             ActionExecutor(
                 tool_registry=self.tool_registry,
-                policy=ActionExecutionPolicy(mode="parallel", max_concurrency=4),
+                trace_writer=self.trace_writer,
+                delegate_depth=self._delegate_depth,
+                shared_memory=self._shared_memory,
+                engine=self,
+                permission_pipeline=resolved_pipeline,
+                read_before_write_enforcer=resolved_rbw,
+                permission_interaction_callback=permission_interaction_callback,
+                interceptor_chain=self._interceptor_chain,
+                auto_approve=auto_approve,
             )
             if self.tool_registry is not None
             else None
@@ -288,10 +372,12 @@ class Engine(Generic[StateT, ObservationT, ActionT]):
         self._token_usage: int = 0
         self._active_run_id: str = ""
         self._runtime_history: History = _EngineWindowHistory(window_size=24)
-        self._tool_loop_detector = ToolCallLoopDetector(
+        self._tool_loop_detector = loop_detector or ToolCallLoopDetector(
             max_repeats=max(1, int(self.context_config.loop_max_repeats))
         )
         self._last_system_prompt: str = ""
+        self._critic_modified_prompt: Optional[str] = None
+        self._critic_instruction_patch: Optional[str] = None
         self._last_prompt_metadata: Dict[str, Any] = {}
         self._last_context_telemetry: Dict[str, Any] = {}
         self._model_runtime: _ModelRuntime[StateT, ObservationT, ActionT] = (
@@ -305,8 +391,51 @@ class Engine(Generic[StateT, ObservationT, ActionT]):
             _ControlRuntime(self)
         )
         self._trace_runtime: _TraceRuntime[StateT] = _TraceRuntime(self)
+        self._handoff_runtime = _HandoffRuntime(self)
+        self._handoff_history: list[str] = []  # tracks agent names for loop detection
+        # NOTE (v0.6): Handoff Decision-mode handling is stable for v0.6.
+        # Changes to the Engine loop for full handoff context strategies,
+        # shared memory, and canonical multi-agent templates are deferred to v0.7.
+        # See docs/internal/plans/v0.7_handoff_scope.md for details.
+        self.stream_callback: Optional[Any] = None  # Callable[[str], None] for streaming
         self._context_runtime = _ContextRuntime(self)
         self._context_runtime.apply_config(self.context_config)
+
+        # LLM Cache: auto-wrap agent.llm with CachedModel if backend provided
+        self.cache_backend = cache_backend
+        if self.cache_backend is not None and getattr(self.agent, "llm", None) is not None:
+            from ..cache import CachedModel
+
+            if not isinstance(self.agent.llm, CachedModel):
+                self.agent.llm = CachedModel(self.agent.llm, self.cache_backend)
+
+        # Checkpoint: new CheckpointStore takes precedence over legacy CheckpointManager
+        self._checkpoint_store = checkpoint_store
+        self._version_tracker: Optional[StateVersionTracker] = None
+        self._durability_manager: Optional[DurabilityManager] = None
+        self._pending_write_manager: Optional[PendingWriteManager] = None
+        self._last_checkpoint_id: Optional[CheckpointId] = None
+
+        if checkpoint_store is not None:
+            self._durability_manager = DurabilityManager(checkpoint_store, mode=checkpoint_durability)
+            self._pending_write_manager = PendingWriteManager(checkpoint_store)
+
+        # Legacy checkpoint manager (deprecated — kept for backward compat)
+        self.checkpoint_manager = checkpoint_manager
+
+        # Tracing provider: if provided, bridge legacy TraceWriter to it
+        self._tracing_provider = tracing_provider
+        if tracing_provider is not None and trace_writer is not None:
+            from ..tracing.legacy_processor import LegacyTraceWriterProcessor
+            tracing_provider.add_processor(LegacyTraceWriterProcessor(trace_writer))
+
+        # Handoff tools: auto-register if agent declares handoff_targets
+        self._handoff_tools: List[Any] = []
+        if getattr(agent, "handoff_targets", None) and self.tool_registry is not None:
+            self._register_handoff_tools()
+
+        # Cancellation token — shared with EngineResult for external cancel
+        self._cancel_token = CancelToken()
 
     def resolve_protocol(self) -> Any:
         if self._resolved_protocol is not None:
@@ -351,23 +480,326 @@ class Engine(Generic[StateT, ObservationT, ActionT]):
         """Remove all runtime hooks."""
         self.hooks = []
 
-    def run(self, task: str | Task, **kwargs: Any) -> EngineResult[StateT]:
+    # ------------------------------------------------------------------
+    # Public step-by-step API for interactive REPLs and external drivers
+    # ------------------------------------------------------------------
+
+    def init_session(self, task: str, **kwargs: Any) -> tuple[StateT, ObservationT]:
+        """Initialize a new session for step-by-step execution.
+
+        Sets up Engine run state, creates initial state and observation.
+        Returns (state, observation) ready for the first ``step()`` call.
+        """
         self._reset_run_state()
         memory = self._memory()
         if memory is not None:
             try:
                 memory.reset()
-            except Exception:
-                pass
+            except Exception as exc:
+                _logger.debug("Failed to reset memory: %s", exc)
         try:
             self._history().reset()
-        except Exception:
-            pass
+        except Exception as exc:
+            _logger.debug("Failed to reset history: %s", exc)
         if hasattr(self.recovery_policy, "reset"):
             try:
                 self.recovery_policy.reset()
-            except Exception:
-                pass
+            except Exception as exc:
+                _logger.debug("Failed to reset recovery_policy: %s", exc)
+        self._active_run_id = f"run_{uuid4().hex[:12]}"
+        self._last_system_prompt = ""
+        self._last_prompt_metadata = {}
+        self._token_usage = 0
+        self._last_context_telemetry = {}
+        self._context_runtime.reset()
+        self._resolved_protocol = self.resolve_protocol()
+
+        task_obj, task_text = self._normalize_task(task)
+        self._apply_task_budget(task_obj)
+
+        state = self.agent.init_state(task_text, **kwargs)
+        self._memory_append("task", {"objective": task_text}, 0)
+        self._active_task = task_text
+        self._active_task_obj = task_obj
+        self._active_state = state
+
+        self._setup_toolsets(
+            {"state": state, "trace_writer": self.trace_writer, "task": task_obj or task_text}
+        )
+
+        started_at = time.monotonic()
+        observation = self._build_initial_observation(state, step_id=0, started_at=started_at)
+        return state, observation
+
+    def step(
+        self,
+        state: StateT,
+        observation: ObservationT,
+    ) -> StepResult:
+        """Execute a single decide → act → reduce step.
+
+        Returns a :class:`StepResult` with the decision, action results,
+        new observation, and stop status.
+
+        The caller can inspect ``result.stop`` to decide whether to
+        continue the loop.
+        """
+        from .interrupt import (
+            EngineInterrupt,
+            InterruptInfo,
+            _reset_interrupt_context,
+        )
+
+        _reset_interrupt_context()
+        step_id = state.current_step
+        started_at = time.monotonic()
+        record = StepRecord(step_id=step_id, agent_id=self.agent.name)
+        self.records.append(record)
+
+        # DECIDE
+        try:
+            decision = self._run_decide(state, observation, record)
+        except EngineInterrupt as ei:
+            # Save checkpoint and report interrupt
+            cp_id = self._save_interrupt_checkpoint(step_id, state, ei)
+            info = InterruptInfo(
+                interrupt_id=ei.interrupt_id,
+                checkpoint_id=cp_id,
+                value=ei.value,
+            )
+            self._emit(step_id, RuntimePhase.INTERRUPT, ok=True, payload={"interrupt_id": ei.interrupt_id})
+            self._finalize_step(record, state)
+            return StepResult(
+                step_id=step_id,
+                decision=None,
+                record=record,
+                observation=observation,
+                action_results=[],
+                stop=True,
+                stop_reason=StopReason.INTERRUPT,
+                interrupt_info=info,
+            )
+        except Exception as exc:
+            failed_phase = self._infer_failed_phase(record)
+            if self._recover(state, failed_phase, exc):
+                self._finalize_step(record, state)
+                return StepResult(
+                    step_id=step_id,
+                    decision=None,
+                    record=record,
+                    observation=observation,
+                    action_results=[],
+                    stop=False,
+                    recovered=True,
+                )
+            self._finalize_step(record, state)
+            return StepResult(
+                step_id=step_id,
+                decision=None,
+                record=record,
+                observation=observation,
+                action_results=[],
+                stop=True,
+                stop_reason=StopReason.UNRECOVERABLE_ERROR,
+                error=exc,
+            )
+
+        # Handle non-act modes directly
+        if decision.mode in ("final", "wait", "handoff"):
+            if decision.mode == "final":
+                new_observation = self._build_observation_after_action(
+                    state, step_id, started_at, decision, []
+                )
+                record.observation = new_observation
+                self._memory_append("observation", new_observation, record.step_id)
+                self._run_reduce(state, new_observation, decision, record)
+                stop = self._run_check_stop(state, decision, step_id, started_at)
+                self._finalize_step(record, state)
+                return StepResult(
+                    step_id=step_id,
+                    decision=decision,
+                    record=record,
+                    observation=new_observation,
+                    action_results=[],
+                    stop=stop,
+                    stop_reason=(
+                        StopReason(state.stop_reason)
+                        if state.stop_reason
+                        else StopReason.FINAL
+                    ),
+                )
+            self._finalize_step(record, state)
+            return StepResult(
+                step_id=step_id,
+                decision=decision,
+                record=record,
+                observation=observation,
+                action_results=[],
+                stop=(decision.mode == "final"),
+                stop_reason=StopReason.FINAL if decision.mode == "final" else None,
+            )
+
+        # ACT
+        try:
+            action_results = self._run_act(state, decision, record)
+        except Exception as exc:
+            failed_phase = self._infer_failed_phase(record)
+            if self._recover(state, failed_phase, exc):
+                self._finalize_step(record, state)
+                return StepResult(
+                    step_id=step_id,
+                    decision=decision,
+                    record=record,
+                    observation=observation,
+                    action_results=[],
+                    stop=False,
+                    recovered=True,
+                )
+            self._finalize_step(record, state)
+            return StepResult(
+                step_id=step_id,
+                decision=decision,
+                record=record,
+                observation=observation,
+                action_results=[],
+                stop=True,
+                stop_reason=StopReason.UNRECOVERABLE_ERROR,
+                error=exc,
+            )
+
+        # REDUCE
+        new_observation = self._build_observation_after_action(
+            state, step_id, started_at, decision, action_results
+        )
+        record.observation = new_observation
+        self._memory_append("observation", new_observation, record.step_id)
+        try:
+            self._run_reduce(state, new_observation, decision, record)
+        except EngineInterrupt as ei:
+            cp_id = self._save_interrupt_checkpoint(step_id, state, ei)
+            info = InterruptInfo(
+                interrupt_id=ei.interrupt_id,
+                checkpoint_id=cp_id,
+                value=ei.value,
+            )
+            self._emit(step_id, RuntimePhase.INTERRUPT, ok=True, payload={"interrupt_id": ei.interrupt_id})
+            self._finalize_step(record, state)
+            return StepResult(
+                step_id=step_id,
+                decision=decision,
+                record=record,
+                observation=new_observation,
+                action_results=action_results,
+                stop=True,
+                stop_reason=StopReason.INTERRUPT,
+                interrupt_info=info,
+            )
+
+        # CHECK STOP
+        stop = self._run_check_stop(state, decision, step_id, started_at)
+        self._finalize_step(record, state)
+
+        stop_reason = None
+        if stop:
+            stop_reason = StopReason(state.stop_reason) if state.stop_reason else StopReason.MAX_STEPS
+
+        return StepResult(
+            step_id=step_id,
+            decision=decision,
+            record=record,
+            observation=new_observation,
+            action_results=action_results,
+            stop=stop,
+            stop_reason=stop_reason,
+        )
+
+    def advance_step(self, state: StateT) -> None:
+        """Advance the state step counter after a completed step."""
+        state.advance_step()
+
+    def append_user_message(self, content: str, step_id: int) -> None:
+        """Append a user message to the conversation history."""
+        self._history_append("user", content, step_id, metadata={"source": "user"})
+
+    def submit_turn(
+        self, state: StateT, user_message: str
+    ) -> tuple[StateT, ObservationT]:
+        """Submit a user message and build the initial observation for the next turn.
+
+        This is the public API for multi-turn REPLs. It wraps
+        ``append_user_message()`` + ``_build_initial_observation()`` so
+        callers don't need to reach into private methods.
+
+        Returns (state, observation) ready for the next ``step()`` call.
+        """
+        step_id = state.current_step
+        self.append_user_message(user_message, step_id)
+        observation = self._build_initial_observation(state, step_id, time.monotonic())
+        return state, observation
+
+    def execute_actions(
+        self, state: StateT, decision: Decision[ActionT], record: StepRecord
+    ) -> List[Any]:
+        """Public alias for ``_run_act()`` — execute a decision's actions.
+
+        Useful for REPLs that want to handle DECIDE themselves but delegate
+        ACT execution to the engine.
+        """
+        return self._run_act(state, decision, record)
+
+    def rebuild_observation(self, state: StateT) -> ObservationT:
+        """Build a fresh observation for the current state.
+
+        Useful after error recovery or parser repair when the REPL needs
+        to continue the loop without submitting a new user message.
+        """
+        return self._build_initial_observation(
+            state, state.current_step, time.monotonic()
+        )
+
+    def budget_exhausted(self, state: StateT) -> bool:
+        """Check if the runtime budget has been exhausted."""
+        return self._budget_exhausted(state.current_step, time.monotonic(), state)
+
+    @property
+    def current_state(self) -> Optional[StateT]:
+        """Return the active state, if any."""
+        return self._active_state
+
+    @property
+    def checkpoint_store(self) -> Optional[CheckpointStore]:
+        """Return the configured CheckpointStore, if any."""
+        return self._checkpoint_store
+
+    @property
+    def tracing_provider(self) -> Any:
+        """Return the configured TracingProvider, if any."""
+        return self._tracing_provider
+
+    def run(self, task: str | Task, **kwargs: Any) -> EngineResult[StateT]:
+        # Check for resume-from-checkpoint internal kwargs
+        _resume_state = kwargs.pop("_resume_state", None)
+        _resume_step = kwargs.pop("_resume_step", None)
+
+        self._reset_run_state()
+        # Wire delegate interceptor to engine's event list
+        if self._delegate_interceptor is not None:
+            self._delegate_interceptor._event_sink = self.events
+        memory = self._memory()
+        if memory is not None:
+            try:
+                memory.reset()
+            except Exception as exc:
+                _logger.debug("Failed to reset memory: %s", exc)
+        try:
+            self._history().reset()
+        except Exception as exc:
+            _logger.debug("Failed to reset history: %s", exc)
+        if hasattr(self.recovery_policy, "reset"):
+            try:
+                self.recovery_policy.reset()
+            except Exception as exc:
+                _logger.debug("Failed to reset recovery_policy: %s", exc)
         self._active_run_id = (
             str(getattr(self.trace_writer, "run_id", "")).strip()
             if self.trace_writer is not None
@@ -381,7 +813,28 @@ class Engine(Generic[StateT, ObservationT, ActionT]):
         self._last_context_telemetry = {}
         self._context_runtime.reset()
         self._resolved_protocol = self.resolve_protocol()
-        state = self.agent.init_state(task_text, **kwargs)
+        # Record multi-agent topology in trace metadata
+        if self.trace_writer is not None and self.agent_registry is not None:
+            self.trace_writer.metadata["agent_topology"] = {
+                "type": "multi_agent",
+                "agents": [s.name for s in self.agent_registry.list_available()],
+            }
+            self.trace_writer.metadata["agent_name"] = self.agent.name
+
+        # Initialize version tracker for checkpoint store
+        if self._checkpoint_store is not None:
+            self._version_tracker = StateVersionTracker()
+
+        # Connect MCP servers and bridge their tools
+        self._connected_mcp_servers: List[Any] = []
+        if getattr(self.agent, "mcp_servers", None):
+            self._connect_mcp_servers()
+
+        # State initialization: fresh or resumed
+        if _resume_state is not None:
+            state = _resume_state
+        else:
+            state = self.agent.init_state(task_text, **kwargs)
         self._memory_append(
             "task",
             {
@@ -462,6 +915,8 @@ class Engine(Generic[StateT, ObservationT, ActionT]):
                 ),
                 runtime_seconds=time.monotonic() - started_at,
                 total_tokens=int(self._token_usage),
+                run_id=self._active_run_id,
+                _cancel_token=self._cancel_token,
             )
             self._notify_run_end(result)
             self._clear_active_context()
@@ -475,12 +930,25 @@ class Engine(Generic[StateT, ObservationT, ActionT]):
             )
             return result
 
-        step_id = 0
+        step_id = _resume_step if _resume_step is not None else 0
         current_observation = self._build_initial_observation(
             state, step_id, started_at
         )
         try:
             while True:
+                # -- Cancellation check --
+                if self._cancel_token.is_cancel_requested:
+                    if self._cancel_token.mode == CancelMode.IMMEDIATE:
+                        self._emit(
+                            step_id,
+                            RuntimePhase.END,
+                            ok=False,
+                            payload={"stop_reason": "cancelled_immediate"},
+                        )
+                        break
+                    # after_step: break after this iteration's step completes
+                    # (checked again at end of loop body below)
+
                 if self._budget_exhausted(step_id, started_at, state):
                     self._emit(
                         step_id,
@@ -492,7 +960,7 @@ class Engine(Generic[StateT, ObservationT, ActionT]):
 
                 self.validation_gate.before_phase(state, RuntimePhase.DECIDE.value)
 
-                record = StepRecord(step_id=step_id)
+                record = StepRecord(step_id=step_id, agent_id=self.agent.name)
                 self.records.append(record)
 
                 self._dispatch_hook(
@@ -508,17 +976,6 @@ class Engine(Generic[StateT, ObservationT, ActionT]):
                 )
                 try:
                     decision = self._run_decide(state, current_observation, record)
-                    action_results = self._run_act(state, decision, record)
-                    observation = self._build_observation_after_action(
-                        state=state,
-                        step_id=step_id,
-                        started_at=started_at,
-                        decision=decision,
-                        action_results=action_results,
-                    )
-                    record.observation = observation
-                    self._memory_append("observation", observation, record.step_id)
-                    self._run_reduce(state, observation, decision, record)
                 except Exception as exc:
                     failed_phase = self._infer_failed_phase(record)
                     if not self._recover(state, failed_phase, exc):
@@ -549,7 +1006,206 @@ class Engine(Generic[StateT, ObservationT, ActionT]):
                     step_id += 1
                     continue
 
-                critic_action = self._apply_critics(state, record)
+                # Handoff: swap agent within the same loop, skip act/reduce/critic
+                if decision.mode == "handoff":
+                    if self.agent_registry is None:
+                        raise ValueError("handoff requires agent_registry on Engine")
+                    target_name = decision.meta.get("handoff_target", "")
+                    # Loop detection: reject if target already in history (cycle)
+                    if target_name in self._handoff_history:
+                        from ..core.errors import QitosRuntimeError, RuntimeErrorInfo
+                        raise QitosRuntimeError(RuntimeErrorInfo(
+                            category=ErrorCategory.SYSTEM,
+                            message=(
+                                f"Handoff loop detected: agent '{target_name}' already visited "
+                                f"in this run (history: {' -> '.join(self._handoff_history)})"
+                            ),
+                            phase="handoff",
+                            step_id=step_id,
+                            recoverable=False,
+                        ))
+                    # Max handoff count guard
+                    max_handoffs = self.context_config.max_handoffs
+                    if len(self._handoff_history) >= max_handoffs:
+                        from ..core.errors import QitosRuntimeError, RuntimeErrorInfo
+                        raise QitosRuntimeError(RuntimeErrorInfo(
+                            category=ErrorCategory.SYSTEM,
+                            message=f"Maximum handoff count ({max_handoffs}) exceeded",
+                            phase="handoff",
+                            step_id=step_id,
+                            recoverable=False,
+                        ))
+                    current_agent_name = self.agent.name
+                    self._handoff_history.append(current_agent_name)
+                    handoff_result = self._handoff_runtime.execute_handoff(
+                        state, decision, record,
+                    )
+                    self._finalize_step(record, state)
+                    self._dispatch_hook(
+                        "on_after_step",
+                        HookContext(
+                            task=task_text,
+                            step_id=step_id,
+                            phase=RuntimePhase.HANDOFF_END,
+                            state=state,
+                            record=record,
+                        ),
+                    )
+                    # Store handoff context in state.metadata for the new agent
+                    state.metadata["last_handoff"] = {
+                        "from": handoff_result.from_agent,
+                        "to": handoff_result.to_agent,
+                    }
+                    # Increment handoff_count in trace metadata
+                    if self.trace_writer is not None:
+                        hc = self.trace_writer.metadata.get("handoff_count", 0) or 0
+                        self.trace_writer.metadata["handoff_count"] = hc + 1
+                    # Observation after handoff carries handoff info for reduce()
+                    current_observation = {
+                        "action_results": [{
+                            "handoff": True,
+                            "from": handoff_result.from_agent,
+                            "to": handoff_result.to_agent,
+                        }],
+                    }
+                    state.advance_step()
+                    step_id += 1
+                    continue
+
+                # Wait: agent requests a pause, skip act/reduce
+                if (
+                    decision.mode == "wait"
+                    and not bool(decision.meta.get("task_complete_requested"))
+                    and not bool(decision.meta.get("parser_error"))
+                ):
+                    self._finalize_step(record, state)
+                    self._dispatch_hook(
+                        "on_after_step",
+                        HookContext(
+                            task=task_text,
+                            step_id=step_id,
+                            phase=RuntimePhase.CHECK_STOP,
+                            state=state,
+                            record=record,
+                        ),
+                    )
+                    current_observation = self._build_initial_observation(
+                        state, step_id + 1, started_at
+                    )
+                    state.advance_step()
+                    step_id += 1
+                    continue
+
+                # Final decisions still flow through reduce, critics, and
+                # check-stop so hooks, memory, checkpoints, and agent-specific
+                # finalization all see the same lifecycle as action steps.
+                if (
+                    decision.mode == "final"
+                    or (
+                        decision.mode == "wait"
+                        and (
+                            bool(decision.meta.get("task_complete_requested"))
+                            or bool(decision.meta.get("parser_error"))
+                        )
+                    )
+                ):
+                    try:
+                        action_results = []
+                        observation = self._build_observation_after_action(
+                            state=state,
+                            step_id=step_id,
+                            started_at=started_at,
+                            decision=decision,
+                            action_results=action_results,
+                        )
+                        record.observation = observation
+                        self._memory_append("observation", observation, record.step_id)
+                        self._run_reduce(state, observation, decision, record)
+                        fr = getattr(state, "final_result", None)
+                        if isinstance(fr, str) and fr and state.stop_reason is None:
+                            state.set_stop("final", fr)
+                    except Exception as exc:
+                        failed_phase = self._infer_failed_phase(record)
+                        if not self._recover(state, failed_phase, exc):
+                            self._finalize_step(record, state)
+                            self._emit(
+                                step_id,
+                                RuntimePhase.END,
+                                ok=False,
+                                payload={"stop_reason": state.stop_reason},
+                            )
+                            break
+                        self._finalize_step(record, state)
+                        self._dispatch_hook(
+                            "on_after_step",
+                            HookContext(
+                                task=task_text,
+                                step_id=step_id,
+                                phase=RuntimePhase.RECOVER,
+                                state=state,
+                                record=record,
+                                stop_reason=state.stop_reason,
+                            ),
+                        )
+                        current_observation = self._build_initial_observation(
+                            state, step_id + 1, started_at
+                        )
+                        state.advance_step()
+                        step_id += 1
+                        continue
+                else:
+                    try:
+                        action_results = self._run_act(state, decision, record)
+                        observation = self._build_observation_after_action(
+                            state=state,
+                            step_id=step_id,
+                            started_at=started_at,
+                            decision=decision,
+                            action_results=action_results,
+                        )
+                        record.observation = observation
+                        self._memory_append("observation", observation, record.step_id)
+                        self._run_reduce(state, observation, decision, record)
+                        # Early exit: if reduce set final_result, set stop reason
+                        # so critics don't override it and FinalResultCriteria catches it
+                        fr = getattr(state, 'final_result', None)
+                        if isinstance(fr, str) and fr and state.stop_reason is None:
+                            state.set_stop("final", fr)
+                    except Exception as exc:
+                        failed_phase = self._infer_failed_phase(record)
+                        if not self._recover(state, failed_phase, exc):
+                            self._finalize_step(record, state)
+                            self._emit(
+                                step_id,
+                                RuntimePhase.END,
+                                ok=False,
+                                payload={"stop_reason": state.stop_reason},
+                            )
+                            break
+                        self._finalize_step(record, state)
+                        self._dispatch_hook(
+                            "on_after_step",
+                            HookContext(
+                                task=task_text,
+                                step_id=step_id,
+                                phase=RuntimePhase.RECOVER,
+                                state=state,
+                                record=record,
+                                stop_reason=state.stop_reason,
+                            ),
+                        )
+                        current_observation = self._build_initial_observation(
+                            state, step_id + 1, started_at
+                        )
+                        state.advance_step()
+                        step_id += 1
+                        continue
+
+                critic_result = self._apply_critics(state, record)
+                # Support both legacy str return and new dict return
+                if isinstance(critic_result, str):
+                    critic_result = {"action": critic_result, "modified_prompt": None, "instruction_patch": None, "state_patch": None}
+                critic_action = critic_result["action"]
                 if critic_action == "stop":
                     state.set_stop(StopReason.CRITIC_STOP)
                     self._finalize_step(record, state)
@@ -571,6 +1227,8 @@ class Engine(Generic[StateT, ObservationT, ActionT]):
                     )
                     break
                 if critic_action == "retry":
+                    # Apply patches from critic if provided
+                    self._apply_critic_patches(state, critic_result)
                     self._finalize_step(record, state)
                     self._dispatch_hook(
                         "on_after_step",
@@ -591,6 +1249,7 @@ class Engine(Generic[StateT, ObservationT, ActionT]):
 
                 self.validation_gate.after_phase(state, RuntimePhase.CHECK_STOP.value)
                 self._finalize_step(record, state)
+                self._save_checkpoint_if_needed(step_id, state, task_text, task_obj)
                 self._dispatch_hook(
                     "on_after_step",
                     HookContext(
@@ -614,6 +1273,22 @@ class Engine(Generic[StateT, ObservationT, ActionT]):
                 current_observation = observation
                 state.advance_step()
                 step_id += 1
+
+                # -- after_step cancellation: break after step completes --
+                if (
+                    self._cancel_token.is_cancel_requested
+                    and self._cancel_token.mode == CancelMode.AFTER_STEP
+                ):
+                    self._save_checkpoint_if_needed(
+                        state, step_id - 1, force=True
+                    )
+                    self._emit(
+                        step_id - 1,
+                        RuntimePhase.END,
+                        ok=False,
+                        payload={"stop_reason": "cancelled_after_step"},
+                    )
+                    break
         finally:
             self._teardown_env()
             self._teardown_toolsets(
@@ -623,6 +1298,21 @@ class Engine(Generic[StateT, ObservationT, ActionT]):
                     "task": task_obj or task_text,
                 }
             )
+            # Checkpoint on cancellation (immediate mode)
+            if self._cancel_token.is_cancel_requested and self._checkpoint_store is not None:
+                try:
+                    self._save_checkpoint(state, step_id)
+                except Exception as exc:
+                    _logger.warning("Checkpoint save failed during cancellation: %s", exc)
+            # Flush durability manager on run end
+            if self._durability_manager is not None:
+                try:
+                    self._durability_manager.flush()
+                except Exception as exc:
+                    _logger.warning("Durability manager flush failed: %s", exc)
+
+            # Cleanup MCP servers
+            self._cleanup_mcp_servers()
 
         if self.trace_writer is not None:
             status = (
@@ -651,6 +1341,10 @@ class Engine(Generic[StateT, ObservationT, ActionT]):
                 },
             )
 
+        # Extract structured traces from records and events.
+        _critic_traces = self._extract_critic_traces()
+        _handoff_traces = self._extract_handoff_traces()
+
         result = EngineResult(
             state=state,
             records=self.records,
@@ -661,6 +1355,10 @@ class Engine(Generic[StateT, ObservationT, ActionT]):
             ),
             runtime_seconds=time.monotonic() - started_at,
             total_tokens=int(self._token_usage),
+            run_id=self._active_run_id,
+            critic_traces=_critic_traces,
+            handoff_traces=_handoff_traces,
+            _cancel_token=self._cancel_token,
         )
         self._notify_run_end(result)
         self._clear_active_context()
@@ -680,6 +1378,68 @@ class Engine(Generic[StateT, ObservationT, ActionT]):
                 self.budget.max_tokens = int(budget.max_tokens)
         if self._uses_default_stop_criteria:
             self.stop_criteria = [FinalResultCriteria()]
+
+    # -- Configuration export --------------------------------------------------
+
+    def export_config(self) -> EngineConfig:
+        """Return a serializable snapshot of this Engine's configuration."""
+        return EngineConfig(
+            agent_name=getattr(self.agent, "name", "") or "",
+            model_id=getattr(self, "_resolved_model_id", "") or "",
+            budget_max_steps=self.budget.max_steps,
+            budget_max_runtime_seconds=self.budget.max_runtime_seconds,
+            budget_max_tokens=self.budget.max_tokens,
+            critic_names=[type(c).__name__ for c in self.critics],
+            stop_criteria_names=[type(s).__name__ for s in self.stop_criteria],
+            has_checkpoint_store=self._checkpoint_store is not None,
+            has_tracing_provider=self._tracing_provider is not None,
+            protocol_id=getattr(self, "_resolved_protocol_id", None),
+            delegate_depth=self._delegate_depth,
+            has_shared_memory=self._shared_memory is not None,
+            has_env=self.env is not None,
+            tool_count=len(self.tool_registry) if self.tool_registry else 0,
+        )
+
+    # -- Trace extraction helpers ----------------------------------------------
+
+    def _extract_critic_traces(self) -> List[CriticTrace]:
+        """Extract structured CriticTrace entries from step records."""
+        traces: List[CriticTrace] = []
+        for record in self.records:
+            for output in list(getattr(record, "critic_outputs", []) or []):
+                if not isinstance(output, dict):
+                    continue
+                traces.append(
+                    CriticTrace(
+                        step_id=record.step_id,
+                        critic_name=str(output.get("critic_name", "unknown")),
+                        action=str(output.get("action", "continue")),
+                        reason=str(output.get("reason", "")),
+                        score=float(output.get("score", 1.0)),
+                        details=output.get("details", {}),
+                        instruction_patch=output.get("instruction_patch"),
+                        state_patch=output.get("state_patch"),
+                    )
+                )
+        return traces
+
+    def _extract_handoff_traces(self) -> List[HandoffTrace]:
+        """Extract structured HandoffTrace entries from runtime events."""
+        traces: List[HandoffTrace] = []
+        for event in self.events:
+            if event.phase != RuntimePhase.HANDOFF_START:
+                continue
+            payload = event.payload or {}
+            traces.append(
+                HandoffTrace(
+                    step_id=event.step_id,
+                    from_agent=str(payload.get("from", "")),
+                    to_agent=str(payload.get("to", "")),
+                    context_strategy=str(payload.get("context_strategy", "")),
+                    messages_passed=int(payload.get("messages_passed", 0)),
+                )
+            )
+        return traces
 
     def _build_env_view(
         self, state: StateT, step_id: int, started_at: float
@@ -706,7 +1466,12 @@ class Engine(Generic[StateT, ObservationT, ActionT]):
     def _run_decide(
         self, state: StateT, observation: ObservationT, record: StepRecord
     ) -> Decision[ActionT]:
-        return self._model_runtime.run_decide(state, observation, record)
+        # Propagate streaming callback to model runtime
+        self._model_runtime.stream_callback = self.stream_callback
+        try:
+            return self._model_runtime.run_decide(state, observation, record)
+        finally:
+            self._model_runtime.stream_callback = None
 
     def _select_branch(
         self,
@@ -730,8 +1495,24 @@ class Engine(Generic[StateT, ObservationT, ActionT]):
     ) -> None:
         self._control_runtime.run_reduce(state, observation, decision, record)
 
-    def _apply_critics(self, state: StateT, record: StepRecord) -> str:
+    def _apply_critics(self, state: StateT, record: StepRecord) -> Any:
         return self._control_runtime.apply_critics(state, record)
+
+    def _apply_critic_patches(self, state: StateT, critic_result: Dict[str, Any]) -> None:
+        """Apply modified_prompt, instruction_patch, and state_patch from critic retry."""
+        # Store patches so they can be picked up by the next decide() call
+        modified_prompt = critic_result.get("modified_prompt")
+        instruction_patch = critic_result.get("instruction_patch")
+        state_patch = critic_result.get("state_patch")
+
+        if modified_prompt is not None:
+            self._critic_modified_prompt = modified_prompt
+        if instruction_patch is not None:
+            self._critic_instruction_patch = instruction_patch
+        if state_patch is not None:
+            for key, value in state_patch.items():
+                if hasattr(state, key):
+                    setattr(state, key, value)
 
     def _run_check_stop(
         self,
@@ -803,6 +1584,186 @@ class Engine(Generic[StateT, ObservationT, ActionT]):
     def _finalize_step(self, record: StepRecord, state: StateT) -> None:
         self._trace_runtime.finalize_step(record, state)
 
+    def _save_checkpoint_if_needed(
+        self, step_id: int, state: StateT, task_text: str, task_obj: Optional[Any]
+    ) -> None:
+        # --- New CheckpointStore path ---
+        if self._checkpoint_store is not None:
+            self._save_checkpoint(step_id, state, task_text, source="loop")
+            return
+        # --- Legacy CheckpointManager path (deprecated) ---
+        if self.checkpoint_manager is None:
+            return
+        if not self.checkpoint_manager.should_checkpoint(step_id):
+            return
+        from ..checkpoint import CheckpointData
+
+        task_dict = None
+        if task_obj is not None and hasattr(task_obj, "to_dict"):
+            task_dict = task_obj.to_dict()
+        checkpoint = CheckpointData(
+            run_id=self._active_run_id,
+            step_id=step_id,
+            state_dict=state.to_dict(),
+            step_records=[asdict(r) for r in self.records],
+            runtime_events=[asdict(e) for e in self.events],
+            budget=asdict(self.budget),
+            token_usage=int(self._token_usage),
+            task_text=task_text,
+            task_dict=task_dict,
+        )
+        try:
+            self.checkpoint_manager.save(checkpoint)
+        except OSError:
+            pass
+
+    def _save_checkpoint(
+        self,
+        step_id: int,
+        state: StateT,
+        task_text: str,
+        source: str = "loop",
+    ) -> None:
+        """Save a checkpoint via the new CheckpointStore (every step)."""
+        if self._checkpoint_store is None or self._durability_manager is None:
+            return
+
+        state_data = state.to_dict()
+        new_versions: StateVersions = {}
+        if self._version_tracker is not None:
+            # Compute diff from last snapshot and bump versions
+            new_versions = self._version_tracker.snapshot()
+
+        checkpoint = Checkpoint(
+            id=CheckpointId(uuid4().hex),
+            thread_id=self._active_run_id,
+            step=step_id,
+            state_data=state_data,
+            state_versions=new_versions,
+            versions_seen={},
+            pending_writes=[],
+            parent_id=self._last_checkpoint_id,
+        )
+
+        metadata: CheckpointMetadata = {
+            "source": source,
+            "step": step_id,
+            "run_id": self._active_run_id,
+        }
+
+        config = CheckpointConfig(thread_id=self._active_run_id)
+        self._durability_manager.put(config, checkpoint, metadata, new_versions)
+        self._last_checkpoint_id = checkpoint.id
+
+        # Also flush pending writes if any
+        if self._pending_write_manager is not None:
+            write_config = CheckpointConfig(
+                thread_id=self._active_run_id,
+                checkpoint_id=checkpoint.id,
+            )
+            self._pending_write_manager.commit_writes(write_config)
+
+    def resume_from_checkpoint(
+        self,
+        config: CheckpointConfig,
+    ) -> EngineResult:
+        """Resume a run from a saved checkpoint.
+
+        Args:
+            config: CheckpointConfig pointing to the checkpoint to resume from.
+
+        Returns:
+            EngineResult from the resumed run.
+        """
+        if self._checkpoint_store is None:
+            raise RuntimeError("No checkpoint_store configured; cannot resume.")
+
+        tuple_ = self._checkpoint_store.get_tuple(config)
+        if tuple_ is None:
+            raise ValueError(f"Checkpoint not found: {config}")
+
+        checkpoint = tuple_.checkpoint
+        state = type(self._active_state or StateSchema).from_dict(checkpoint.state_data)  # type: ignore[misc]
+
+        # Restore version tracker
+        if self._version_tracker is not None:
+            self._version_tracker.apply_versions(checkpoint.state_versions)
+
+        # Set up internal state for resume
+        self._active_run_id = checkpoint.thread_id
+        self._last_checkpoint_id = checkpoint.id
+        self._active_task = tuple_.metadata.get("run_id", "")
+        self._active_state = state  # type: ignore[assignment]
+
+        # Load pending writes for crash recovery
+        if self._pending_write_manager is not None:
+            resume_config = CheckpointConfig(
+                thread_id=checkpoint.thread_id,
+                checkpoint_id=checkpoint.id,
+            )
+            self._pending_write_manager.load_pending_from_store(resume_config)
+
+        # Continue the run from the next step
+        return self.run(
+            self._active_task,
+            _resume_state=state,
+            _resume_step=checkpoint.step + 1,
+        )
+
+    def resume(
+        self,
+        checkpoint_id: CheckpointId,
+        resume_value: Any = None,
+        resume_values: Optional[Dict[str, Any]] = None,
+    ) -> EngineResult:
+        """Resume an interrupted run.
+
+        Args:
+            checkpoint_id: The checkpoint to resume from.
+            resume_value: Value to pass to the first ``interrupt()`` call.
+            resume_values: Dict mapping interrupt IDs to values for
+                multiple interrupts.
+
+        Returns:
+            EngineResult from the resumed run.
+        """
+        from .interrupt import _set_resume_values
+
+        # Prepare resume values
+        values: Dict[str, Any] = dict(resume_values or {})
+        if resume_value is not None and not values:
+            # Default: map to the first interrupt
+            values["int_1"] = resume_value
+
+        _set_resume_values(values)
+
+        config = CheckpointConfig(
+            thread_id=self._active_run_id,
+            checkpoint_id=checkpoint_id,
+        )
+        result = self.resume_from_checkpoint(config)
+        return result
+
+    def _save_interrupt_checkpoint(
+        self,
+        step_id: int,
+        state: StateT,
+        interrupt_exc: Any,
+    ) -> CheckpointId:
+        """Save a checkpoint when an interrupt fires.  Returns the checkpoint ID."""
+        from .interrupt import EngineInterrupt
+
+        if self._checkpoint_store is None:
+            # No store configured — generate a transient ID
+            return CheckpointId(uuid4().hex)
+
+        self._save_checkpoint(step_id, state, self._active_task, source="interrupt")
+        # Update the interrupt exception with the checkpoint ID
+        if isinstance(interrupt_exc, EngineInterrupt) and self._last_checkpoint_id is not None:
+            interrupt_exc.checkpoint_id = self._last_checkpoint_id
+            return self._last_checkpoint_id
+        return CheckpointId(uuid4().hex)
+
     def _memory_append(
         self,
         role: str,
@@ -846,8 +1807,8 @@ class Engine(Generic[StateT, ObservationT, ActionT]):
                             ),
                         ),
                     )
-            except Exception:
-                pass
+            except Exception as exc:
+                _logger.debug("Failed to append context telemetry to history: %s", exc)
         return self._runtime_history
 
     def _history_append(
@@ -917,8 +1878,8 @@ class Engine(Generic[StateT, ObservationT, ActionT]):
                 if step_value is not None:
                     try:
                         payload_message["_step_id"] = int(step_value)
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        _logger.debug("Failed to parse step_id: %s", exc)
                 tool_calls = item.get("tool_calls")
                 if isinstance(tool_calls, list):
                     payload_message["tool_calls"] = [
@@ -1130,6 +2091,80 @@ class Engine(Generic[StateT, ObservationT, ActionT]):
         self._resolved_protocol_source = ""
         self._last_prompt_metadata = {}
         self._tool_loop_detector.reset()
+        self._handoff_history = []
+        self._critic_modified_prompt = None
+        self._critic_instruction_patch = None
+        self._cancel_token.clear()
+
+    # -- MCP server lifecycle helpers --
+
+    def _connect_mcp_servers(self) -> None:
+        """Connect all configured MCP servers and bridge their tools."""
+        from ..mcp.bridge import mcp_server_to_function_tools
+
+        for server in self.agent.mcp_servers:
+            try:
+                if hasattr(server, "connect"):
+                    server.connect()
+                self._connected_mcp_servers.append(server)
+                # Bridge MCP tools into the engine's tool registry
+                if self.tool_registry is not None:
+                    tools = mcp_server_to_function_tools(server)
+                    for tool in tools:
+                        if hasattr(self.tool_registry, "register"):
+                            self.tool_registry.register(tool)
+            except Exception as exc:
+                # Log but don't fail the entire run for one bad MCP server
+                _logger.debug("MCP server connection failed: %s", exc)
+
+    def _cleanup_mcp_servers(self) -> None:
+        """Cleanup all connected MCP servers."""
+        for server in self._connected_mcp_servers:
+            try:
+                if hasattr(server, "cleanup"):
+                    server.cleanup()
+            except Exception as exc:
+                _logger.debug("MCP server cleanup failed: %s", exc)
+        self._connected_mcp_servers = []
+
+    # -- Handoff tool helpers --
+
+    def _register_handoff_tools(self) -> None:
+        """Register HandoffTool for each declared handoff target."""
+        from ..kit.tool.handoff_tool import HandoffTool
+
+        targets = self.agent.handoff_targets or []
+        for target_name in targets:
+            # Resolve description from agent registry if available
+            description = ""
+            if self.agent_registry is not None:
+                try:
+                    spec = self.agent_registry.resolve(target_name)
+                    description = getattr(spec, "description", "") or ""
+                except Exception as exc:
+                    _logger.debug("Failed to resolve handoff target %s: %s", target_name, exc)
+
+            tool = HandoffTool(
+                target_name=target_name,
+                target_description=description,
+            )
+            if hasattr(self.tool_registry, "register"):
+                self.tool_registry.register(tool)
+            self._handoff_tools.append(tool)
+
+    def _intercept_handoff_action(self, action: Any) -> Any | None:
+        """Check if an action is a handoff tool call. Return Decision.handoff() or None."""
+        if not action.name.startswith("transfer_to_"):
+            return None
+
+        from ..core.decision import Decision
+
+        target = action.name.replace("transfer_to_", "", 1)
+        rationale = ""
+        if isinstance(action.args, dict):
+            rationale = action.args.get("rationale", "")
+
+        return Decision.handoff(target=target, rationale=rationale)
 
     def _harness_mismatch_diagnostics(self) -> Dict[str, Any]:
         llm = getattr(self.agent, "llm", None)

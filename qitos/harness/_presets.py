@@ -28,6 +28,10 @@ _PRESETS: tuple[FamilyPreset, ...] = (
         ),
         notes="Research default for Qwen served through OpenAI-compatible endpoints, with native tool calls preferred before text parsing.",
         recommended_models=("Qwen/Qwen3-8B", "qwen-plus", "Qwen/Qwen3-32B"),
+        recommended_max_steps=30,
+        recommended_max_tokens=500_000,
+        recommended_retry_budget=3,
+        recommended_temperature=0.2,
     ),
     FamilyPreset(
         id="glm",
@@ -49,6 +53,10 @@ _PRESETS: tuple[FamilyPreset, ...] = (
         ),
         notes="Research default for GLM models served through OpenAI-compatible endpoints, preferring native tool calls before text parsing.",
         recommended_models=("GLM-5.1-sii", "zai-org/GLM-5.1-FP8"),
+        recommended_max_steps=30,
+        recommended_max_tokens=500_000,
+        recommended_retry_budget=3,
+        recommended_temperature=0.2,
     ),
     FamilyPreset(
         id="kimi",
@@ -60,6 +68,8 @@ _PRESETS: tuple[FamilyPreset, ...] = (
         tool_policy=ToolPolicy(
             primary_delivery="api_parameter",
             fallback_delivery="prompt_injection",
+            native_tool_call_preferred=True,
+            notes="Kimi K2 supports native OpenAI-compatible tool calls.",
         ),
         context_policy=ContextPolicy(
             context_window_hint=128_000,
@@ -67,6 +77,10 @@ _PRESETS: tuple[FamilyPreset, ...] = (
         ),
         notes="Moonshot/Kimi models keep the JSON-first harness with light fallback to ReAct text.",
         recommended_models=("kimi-k2-0905-preview", "moonshot-v1-128k"),
+        recommended_max_steps=30,
+        recommended_max_tokens=500_000,
+        recommended_retry_budget=3,
+        recommended_temperature=0.2,
     ),
     FamilyPreset(
         id="minimax",
@@ -87,6 +101,10 @@ _PRESETS: tuple[FamilyPreset, ...] = (
         ),
         notes="MiniMax keeps its protocol-specific parser and fallback chain.",
         recommended_models=("MiniMax-M2.5",),
+        recommended_max_steps=30,
+        recommended_max_tokens=500_000,
+        recommended_retry_budget=3,
+        recommended_temperature=0.2,
     ),
     FamilyPreset(
         id="gpt-oss",
@@ -105,6 +123,10 @@ _PRESETS: tuple[FamilyPreset, ...] = (
         ),
         notes="Targets open-weight or third-party OpenAI-compatible serving, not OpenAI-hosted API access.",
         recommended_models=("gpt-oss-120b", "gpt-oss-20b"),
+        recommended_max_steps=30,
+        recommended_max_tokens=500_000,
+        recommended_retry_budget=3,
+        recommended_temperature=0.2,
     ),
     FamilyPreset(
         id="gemma-4",
@@ -124,6 +146,10 @@ _PRESETS: tuple[FamilyPreset, ...] = (
         ),
         notes="OpenAI-compatible serving path for Gemma 4 without binding to the Gemini SDK.",
         recommended_models=("gemma-4-31b-it", "gemma-4-26b-a4b-it"),
+        recommended_max_steps=30,
+        recommended_max_tokens=500_000,
+        recommended_retry_budget=3,
+        recommended_temperature=0.2,
     ),
     FamilyPreset(
         id="openai",
@@ -136,8 +162,11 @@ _PRESETS: tuple[FamilyPreset, ...] = (
             primary_delivery="api_parameter",
             fallback_delivery="prompt_injection",
         ),
-        context_policy=ContextPolicy(context_window_hint=128_000),
-        notes="Compatibility preset retained for existing model-profile inference.",
+        context_policy=ContextPolicy(
+            context_window_hint=1_047_576,
+            fallback_context_window=128_000,
+        ),
+        notes="Compatibility preset retained for existing model-profile inference. gpt-4.1 models have ~1M context; gpt-4o and older models have 128k.",
         recommended_models=("gpt-4.1", "gpt-4o"),
     ),
     FamilyPreset(
@@ -169,6 +198,23 @@ _PRESETS: tuple[FamilyPreset, ...] = (
         context_policy=ContextPolicy(context_window_hint=1_048_576),
         notes="Compatibility preset retained for profile inference; served Gemma 4 uses a separate preset.",
         recommended_models=("gemini-2.5-pro",),
+    ),
+    FamilyPreset(
+        id="deepseek",
+        display_name="DeepSeek",
+        model_matchers=("deepseek", "ds-v4", "ds-v3", "deepseek-"),
+        adapter_kind="openai-compatible",
+        default_protocol="json_decision_v1",
+        fallback_protocols=("tool_use_xml_v1", "react_text_v1"),
+        tool_policy=ToolPolicy(
+            primary_delivery="api_parameter",
+            fallback_delivery="prompt_injection",
+            native_tool_call_preferred=True,
+            notes="DeepSeek V4 supports native OpenAI-compatible tool calls.",
+        ),
+        context_policy=ContextPolicy(context_window_hint=128_000),
+        notes="DeepSeek models work best with JSON decision protocol, falling back to tool_use_xml for models that emit XML.",
+        recommended_models=("ds-v4-pro", "ds-v4-flash", "deepseek-chat"),
     ),
 )
 

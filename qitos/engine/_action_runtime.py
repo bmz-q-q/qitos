@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, Generic, List, TypeVar, cast
+from typing import Any, Dict, Generic, List, Optional, TypeVar, cast
 
 from ..core.action import Action
 from ..core.decision import Decision
 from ..core.tool_result import ToolResult
+from ._protocol import _EngineProtocol
 from .states import RuntimePhase, StepRecord
 
 
@@ -16,7 +17,7 @@ ActionT = TypeVar("ActionT")
 
 
 class _ActionRuntime(Generic[StateT, ActionT]):
-    def __init__(self, engine: Any):
+    def __init__(self, engine: _EngineProtocol):
         self.engine = engine
 
     def run_act(
@@ -48,12 +49,21 @@ class _ActionRuntime(Generic[StateT, ActionT]):
         actions: List[Action] = []
         for action in decision.actions:
             if isinstance(action, Action):
+                # Check for handoff tool interception
+                handoff = engine._intercept_handoff_action(action)
+                if handoff is not None:
+                    return handoff
                 actions.append(action)
                 continue
             payload = (
                 action if isinstance(action, dict) else cast(Dict[str, Any], action)
             )
-            actions.append(Action.from_dict(payload))
+            normalized = Action.from_dict(payload)
+            # Check for handoff tool interception
+            handoff = engine._intercept_handoff_action(normalized)
+            if handoff is not None:
+                return handoff
+            actions.append(normalized)
         for normalized_action in actions:
             engine._memory_append("action", normalized_action, record.step_id)
             block_reason = self._action_block_reason(state, normalized_action)
@@ -139,23 +149,23 @@ class _ActionRuntime(Generic[StateT, ActionT]):
                     ),
                 )
                 return [blocked_result.to_dict()]
-            recovery_message = engine._tool_loop_detector.check(
+            loop_result = engine._tool_loop_detector.check_detailed(
                 normalized_action.name, normalized_action.args
             )
-            if recovery_message:
-                loop_result = ToolResult(
+            if loop_result.level == "block":
+                loop_tool_result = ToolResult(
                     status="error",
                     output=None,
                     error="tool_call_loop_detected",
                     metadata={
                         "tool_name": normalized_action.name,
-                        "reason": recovery_message,
+                        "reason": loop_result.message,
                     },
                 )
-                record.action_results = [loop_result]
+                record.action_results = [loop_tool_result]
                 engine._history_append(
                     "user",
-                    recovery_message,
+                    loop_result.message,
                     record.step_id,
                     metadata={"source": "loop_detector"},
                 )
@@ -165,10 +175,18 @@ class _ActionRuntime(Generic[StateT, ActionT]):
                     payload={
                         "stage": "tool_call_loop_detected",
                         "tool_name": normalized_action.name,
-                        "recovery_message": recovery_message,
+                        "recovery_message": loop_result.message,
                     },
                 )
-                return [loop_result.to_dict()]
+                return [loop_tool_result.to_dict()]
+            elif loop_result.level == "warn":
+                # Soft warning: inject into the observation as guidance
+                engine._history_append(
+                    "user",
+                    loop_result.message,
+                    record.step_id,
+                    metadata={"source": "loop_detector_warning"},
+                )
 
         execution = engine.executor.execute(actions, env=engine.env, state=state)
         record.tool_invocations = [
@@ -186,17 +204,56 @@ class _ActionRuntime(Generic[StateT, ActionT]):
             for item in execution
         ]
         results: List[ToolResult] = []
+        max_chars = int(getattr(engine.context_config, "tool_result_max_chars", 0) or 0)
+        per_message_max = int(getattr(engine.context_config, "tool_result_per_message_max_chars", 0) or 0)
+        message_total_chars = 0
         for item in execution:
             if item.status.value == "success":
+                output = item.output
+                output_status = ""
+                output_error = None
+                if isinstance(output, dict):
+                    output_status = str(output.get("status") or "").strip().lower()
+                    output_error = output.get("error") or output.get("message")
+                if output_status in {"error", "failed", "denied", "needs_user_input"}:
+                    results.append(
+                        ToolResult(
+                            status="error",
+                            output=output,
+                            error=str(output_error or output_status),
+                            metadata={
+                                "tool_name": item.name,
+                                "latency_ms": item.latency_ms,
+                                "attempts": item.attempts,
+                            },
+                        )
+                    )
+                    continue
+                # Truncate large tool results to prevent context overflow
+                if max_chars > 0 and output is not None:
+                    output_str = output if isinstance(output, str) else json.dumps(output, ensure_ascii=False, default=str)
+                    # Per-message aggregate budget: if total exceeds limit, apply stricter per-tool truncation
+                    effective_max = max_chars
+                    if per_message_max > 0 and message_total_chars + len(output_str) > per_message_max:
+                        # Reduce per-tool limit to fit within aggregate budget
+                        remaining = max(0, per_message_max - message_total_chars)
+                        effective_max = min(max_chars, remaining)
+                    if len(output_str) > effective_max:
+                        head = int(effective_max * 0.7)
+                        tail = effective_max - head
+                        truncated = output_str[:head] + f"\n... [truncated, {len(output_str)} chars total] ...\n" + output_str[-tail:]
+                        output = truncated
+                        message_total_chars += len(output) if isinstance(output, str) else 0
+                    else:
+                        message_total_chars += len(output_str)
                 results.append(
                     ToolResult(
                         status="success",
-                        output=item.output,
+                        output=output,
                         metadata={
                             "tool_name": item.name,
                             "latency_ms": item.latency_ms,
                             "attempts": item.attempts,
-                            "action_args": dict(actions[len(results)].args or {}) if len(results) < len(actions) else {},
                         },
                     )
                 )
@@ -210,7 +267,6 @@ class _ActionRuntime(Generic[StateT, ActionT]):
                             "tool_name": item.name,
                             "latency_ms": item.latency_ms,
                             "attempts": item.attempts,
-                            "action_args": dict(actions[len(results)].args or {}) if len(results) < len(actions) else {},
                         },
                     )
                 )

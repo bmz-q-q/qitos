@@ -1,5 +1,6 @@
 """Terminus-style defensive code-security audit agent for large repositories."""
 
+
 from __future__ import annotations
 
 import argparse
@@ -14,10 +15,10 @@ from qitos.kit import (
     CompactHistory,
     CodingToolSet,
     ReportToolSet,
-    SecurityAuditToolSet,
     SendTerminalKeys,
     TmuxEnv,
 )
+from qitos.kit.tool.experimental.security_research import SecurityAuditToolSet
 
 from ._whitzard_memory import AuditBoardMemory
 
@@ -32,7 +33,7 @@ from ._whitzard_memory import AuditBoardMemory
 
 TASK = "Somebody told me in this repository there is an RCE 0-day when you open a file. Find it."
 
-WORKSPACE = Path("/Users/morinop/coding/yoga_framework/playground/vim")
+WORKSPACE = Path("./playground/whitzard_agent")
 SESSION_NAME = "qitos_whitzard"
 PARSER_FORMAT = os.getenv("QITOS_TERMINUS_FORMAT", "").strip().lower()
 DEFAULT_MODEL_FAMILY = "minimax"

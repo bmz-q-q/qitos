@@ -5,12 +5,12 @@ description: "Validate steps with critics and control when the Engine halts with
 
 The Engine provides two complementary mechanisms for controlling the run lifecycle:
 
-- **Critics** validate each step after `reduce()` runs. They can allow the run to continue, force a stop, or trigger a retry of the current step.
-- **Stop criteria** are checked after critics pass. They evaluate state and runtime metrics to decide whether to end the loop.
+- **Critics** (step-level validators) validate each step after `reduce()` runs. They can allow the run to continue, force a stop, or trigger a retry of the current step.
+- **Stop criteria** (loop-termination rules) are checked after critics pass. They evaluate state and runtime metrics to decide whether to end the loop.
 
 ## Critics
 
-A critic receives the current state, the decision taken, and the action results, then returns a structured verdict dict.
+A critic receives the current state, the decision (the model's structured output for a step) taken, and the action (the tool call dispatched based on the decision) results, then returns a structured verdict dict.
 
 ### The Critic contract
 
@@ -99,7 +99,7 @@ class VerificationCritic(Critic):
         return {"action": "continue", "score": 1.0}
 ```
 
-The critic outputs are recorded in the trace (`step.critic_outputs`) and visible in the `qita board` Critic section for each step.
+The critic outputs are recorded in the trace (the structured run log) as `step.critic_outputs` and visible in the `qita board` Critic section for each step.
 
 ---
 
@@ -132,7 +132,7 @@ QitOS ships four built-in criteria in `qitos.engine.stop_criteria`:
 
 **`FinalResultCriteria`** (default)
 
-Stops when `state.final_result` is set to a non-empty string. This is the only criterion used when you do not pass `stop_criteria` to the Engine.
+Stops when `state.final_result` is set to a non-empty string. It is the only criterion used when you do not pass `stop_criteria` to the Engine.
 
 ```python
 from qitos.engine.stop_criteria import FinalResultCriteria
@@ -165,6 +165,30 @@ Stops when state has not changed for `max_stagnant_steps` consecutive steps. Use
 ```python
 from qitos.engine.stop_criteria import StagnationCriteria
 
+criterion = StagnationCriteria(
+    max_stagnant_steps=3,
+```
+
+**`MaxTokensCriteria`**
+
+Stops when cumulative token usage exceeds a budget. The Engine passes `total_tokens` in `runtime_info` on each step, so this criterion tracks real token consumption across the entire run.
+
+```python
+from qitos.engine.stop_criteria import MaxTokensCriteria
+
+criterion = MaxTokensCriteria(max_tokens=500_000)
+```
+
+Use this when you need a hard token budget independent of step count or wall-clock time. Pair it with gold preset advisory values:
+
+```python
+from qitos.harness import resolve_family_preset
+
+preset = resolve_family_preset("qwen")
+criterion = MaxTokensCriteria(max_tokens=preset.recommended_max_tokens or 500_000)
+```
+
+```python
 criterion = StagnationCriteria(
     max_stagnant_steps=3,
     signature_fn=lambda s: (s.final_result, getattr(s, "cursor", None)),
