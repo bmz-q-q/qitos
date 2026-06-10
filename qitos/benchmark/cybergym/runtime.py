@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 from qitos.core import ExperimentSpec, RunSpec, Task
@@ -17,12 +18,18 @@ def prepare_task_dir(
     data_dir: str | Path,
     server: str,
     difficulty: str,
+    fresh: bool = True,
 ) -> Path:
     ensure_cybergym_source_importable()
     from cybergym.task.gen_task import generate_task
     from cybergym.task.types import TaskConfig, TaskDifficulty
 
     out_path = Path(out_dir).expanduser().resolve()
+    # Start each (re)run from a clean task dir so agent artifacts from a prior
+    # run (PoCs, scratch files, .agent/ memory) can't pollute it. Safe under
+    # --resume: completed tasks are filtered out before this is ever called.
+    if fresh and out_path.exists():
+        shutil.rmtree(out_path, ignore_errors=True)
     out_path.mkdir(parents=True, exist_ok=True)
 
     generate_task(
