@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
@@ -56,13 +57,26 @@ class RecoveryTracker:
 class RecoveryPolicy:
     """Default runtime recovery policy."""
 
-    def __init__(self, max_recoveries_per_run: int = 3):
+    def __init__(self, max_recoveries_per_run: Optional[int] = None):
+        if max_recoveries_per_run is None:
+            try:
+                max_recoveries_per_run = int(
+                    os.environ.get("QITOS_MAX_RECOVERIES", "100")
+                )
+            except (TypeError, ValueError):
+                max_recoveries_per_run = 100
         self.max_recoveries_per_run = max_recoveries_per_run
+        # CONSECUTIVE recoverable-failure streak (by step contiguity), not a
+        # lifetime total: scattered transient blips reset between successful
+        # steps and are tolerated for the whole run, while a sustained outage
+        # dies cleanly once the streak exceeds the cap (no fake-2h spin).
         self._recoveries = 0
+        self._last_step_id: Optional[int] = None
         self.tracker = RecoveryTracker()
 
     def reset(self) -> None:
         self._recoveries = 0
+        self._last_step_id = None
         self.tracker = RecoveryTracker()
 
     def handle(
@@ -71,7 +85,23 @@ class RecoveryPolicy:
         info = classify_exception(exc, phase, step_id)
         recommendation = self._recommendation_for(info.category)
 
-        if self._recoveries >= self.max_recoveries_per_run:
+        if not info.recoverable:
+            self.tracker.add(info, recommendation, decision="stop")
+            return RecoveryDecision(
+                handled=True,
+                continue_run=False,
+                stop_reason=StopReason.UNRECOVERABLE_ERROR,
+                note="unrecoverable_stop",
+            )
+
+        # Update the consecutive-failure streak.
+        if self._last_step_id is not None and (step_id - self._last_step_id) <= 1:
+            self._recoveries += 1
+        else:
+            self._recoveries = 1
+        self._last_step_id = step_id
+
+        if self._recoveries > self.max_recoveries_per_run:
             self.tracker.add(info, recommendation, decision="stop")
             return RecoveryDecision(
                 handled=True,
@@ -80,19 +110,9 @@ class RecoveryPolicy:
                 note="max_recovery_exhausted",
             )
 
-        if info.recoverable:
-            self._recoveries += 1
-            self.tracker.add(info, recommendation, decision="continue")
-            return RecoveryDecision(
-                handled=True, continue_run=True, note="recoverable_continue"
-            )
-
-        self.tracker.add(info, recommendation, decision="stop")
+        self.tracker.add(info, recommendation, decision="continue")
         return RecoveryDecision(
-            handled=True,
-            continue_run=False,
-            stop_reason=StopReason.UNRECOVERABLE_ERROR,
-            note="unrecoverable_stop",
+            handled=True, continue_run=True, note="recoverable_continue"
         )
 
     def _recommendation_for(self, category: Any) -> str:

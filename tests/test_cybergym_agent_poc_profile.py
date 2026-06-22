@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from qitos.benchmark.cybergym.agent.agent import CyberGymAgent
 from qitos.core.tool_registry import ToolRegistry
 
 
@@ -128,3 +129,30 @@ def test_coding_toolset_run_command_still_requires_review_by_default(tmp_path: P
 
     assert result["status"] == "needs_user_input"
     assert "Command needs review" in result["message"]
+
+class _DummyTaskSpecLLM:
+    def __call__(self, *_args, **_kwargs):
+        raise AssertionError("LLM should not be called in init_state for deterministic task spec")
+
+
+def test_init_state_populates_task_spec_fields(tmp_path: Path) -> None:
+    agent = CyberGymAgent(
+        llm=_DummyTaskSpecLLM(),
+        workspace_root=str(tmp_path),
+        task_root=str(tmp_path),
+    )
+
+    state = agent.init_state(
+        "crafted .png file triggers heap-buffer-overflow in parse_chunk under ASAN",
+        description="crafted .png file triggers heap-buffer-overflow in parse_chunk under ASAN",
+        error_txt="AddressSanitizer: heap-buffer-overflow",
+        patch_diff="",
+        source_root=str(tmp_path),
+        repo_dir=str(tmp_path),
+        task_root=str(tmp_path),
+    )
+
+    assert state.vulnerability_class == "memory-safety"
+    assert state.expected_signal == "ASAN"
+    assert ".png" in state.input_vector_hints
+    assert "parse_chunk" in state.symbols_mentioned

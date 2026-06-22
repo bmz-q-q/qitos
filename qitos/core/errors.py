@@ -135,6 +135,43 @@ def classify_exception(exc: Exception, phase: str, step_id: int) -> RuntimeError
             recoverable=True,
         )
 
+    # Transient model-call failures in model-driven phases are recoverable —
+    # retry the step instead of killing the run. GLM/SGLang stream stalls and
+    # gateway outages surface as openai.APIError("stream timeout") /
+    # "no healthy upstream", which are NEITHER a TimeoutError NOR match the
+    # "timed out" keyword above, so they must be matched by substring here.
+    # (Restores pre-v06 behaviour; see tests/test_runtime_recovery.py. Without
+    # this, a single GLM stream timeout in DECIDE was classified SYSTEM /
+    # non-recoverable -> immediate unrecoverable_error, killing ~50% of tasks.)
+    if phase.lower() in {
+        "decide",
+        "propose",
+        "plan",
+        "formulation",
+        "investigation",
+    } and any(
+        marker in msg
+        for marker in (
+            "timeout",
+            "timed out",
+            "stream timeout",
+            "read timeout",
+            "connection error",
+            "api connection",
+            "no healthy upstream",
+            "service unavailable",
+            "bad gateway",
+            "overloaded",
+        )
+    ):
+        return RuntimeErrorInfo(
+            category=ErrorCategory.MODEL,
+            message=str(exc),
+            phase=phase,
+            step_id=step_id,
+            recoverable=True,
+        )
+
     if isinstance(exc, (TimeoutError, ConnectionError)) and phase.lower() in {
         "decide",
         "propose",
